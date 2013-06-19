@@ -44,23 +44,6 @@ namespace luaport
   extern int type(const class object &obj);
   extern class object registry(lua_State *L);
 
-//  extern int lua_newclass(lua_State *L);
-
-  // push funcs
-  static void push(lua_State *L, const bool &value);
-  static void push(lua_State *L, const char *val);
-  static void push(lua_State *L, const double &value);
-  static void push(lua_State *L, const int &value);
-  static void push(lua_State *L, const long &value);
-  static void push(lua_State *L, const unsigned long &value);
-  static void push(lua_State *L, const lua_CFunction &value);
-  static void push(lua_State *L, const std::string &value);
-  static void push(lua_State *L, const class object &value);
-  static void push(lua_State *L, const class proxy &value);
-  template <typename T>
-    static void push(lua_State *L, T *val, bool adopt = false);
-
-
   #define function(func) get_functype(func).get_lfunc<func>()
   #define method(func) get_functype(&func).get_lfunc<&func>()
 
@@ -257,30 +240,15 @@ namespace luaport
 
       object(const class proxy &p);
 
+      // object of any value
       template <typename T>
-        object(lua_State *L, const T &val)
-        : L(L), ref(LUA_REFNIL)
-      {
-        if (L)
-        {
-          luaport::push(L, val);
-          ref = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (OBJ FROM T): %d\n", ref);
-//printf("TYPE: %s\n", lua_typename(L, type()));
-        }
-      }
+        object(lua_State *L, const T &val);
 
+      // object of registered class
       template <typename T>
-        object(lua_State *L, T *val, bool adopt = false)
-        : L(L), ref(LUA_REFNIL)
-      {
-        if (L)
-        {
-          luaport::push(L, val, adopt);
-          ref = luaL_ref(L, LUA_REGISTRYINDEX);
-        }
-      }
+        object(lua_State *L, T *val, bool adopt = false);
 
+      // Dtor
       ~object()
       {
         clear();
@@ -405,47 +373,14 @@ namespace luaport
       template <typename T>
         class proxy operator[](const T &key) const;
 
-      object operator()()
-      {
-        this->push();
-        lua_call(L, 0, 1);
-        object result = from_stack(L, -1);
-        lua_pop(L, 1);
-        return result;
-      }
+      // lua function call
+      object operator()();
       template <typename T1>
-        object operator()(T1 &arg1)
-      {
-        this->push();
-        luaport::push(L, arg1);
-        lua_call(L, 1, 1);
-        object result = from_stack(L, -1);
-        lua_pop(L, 1);
-        return result;
-      }
+        object operator()(T1 &arg1);
       template <typename T1, typename T2>
-        object operator()(T1 &arg1, T2 &arg2)
-      {
-        this->push();
-        luaport::push(L, arg1);
-        luaport::push(L, arg2);
-        lua_call(L, 2, 1);
-        object result = from_stack(L, -1);
-        lua_pop(L, 1);
-        return result;
-      }
+        object operator()(T1 &arg1, T2 &arg2);
       template <typename T1, typename T2, typename T3>
-        object operator()(T1 &arg1, T2 &arg2, T3 &arg3)
-      {
-        this->push();
-        luaport::push(L, arg1);
-        luaport::push(L, arg2);
-        luaport::push(L, arg3);
-        lua_call(L, 3, 1);
-        object result = from_stack(L, -1);
-        lua_pop(L, 1);
-        return result;
-      }
+        object operator()(T1 &arg1, T2 &arg2, T3 &arg3);
 
       operator bool() const
       {
@@ -545,39 +480,13 @@ namespace luaport
         return object(*this).type();
       }
 
+      // assignment
       template <typename T>
-        void operator=(const T &val)
-      {
-//        if (ref_table == LUA_REFNIL)
-//        {
-//          luaL_error(L, "attempt to index a nil value");
-//          return;
-//        }
-        lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
-        luaport::push(L, val);
-        lua_settable(L, -3);
-        lua_pop(L, 1);
-      }
+        void operator=(const T &val);
 
+      // more index access
       template <typename T>
-        proxy operator[](const T &key) const
-      {
-//        if (ref_table == LUA_REFNIL)
-//        {
-//          luaL_error(L, "attempt to index a nil value");
-//        }
-        lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
-        lua_gettable(L, -2);
-        int newtable = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (TABLE): %d\n", newtable);
-        lua_pop(L, 1);
-        luaport::push(L, key);
-        int newkey = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (KEY): %d\n", newkey);
-        return proxy(L, newtable, newkey);
-      }
+        proxy operator[](const T &key) const;
 
       object operator()() const
       {
@@ -800,6 +709,22 @@ printf("COPYING FROM REFERENCE!\n");
   static int lua_class_get_member(lua_State *L);
   static int lua_class_set_member(lua_State *L);
   inline static std::string lua_get_args_string(lua_State *L);
+
+  // push funcs
+  static void push(lua_State *L, const bool &value);
+  static void push(lua_State *L, const char *val);
+  static void push(lua_State *L, const double &value);
+  static void push(lua_State *L, const int &value);
+  static void push(lua_State *L, const long &value);
+  static void push(lua_State *L, const unsigned long &value);
+  static void push(lua_State *L, const lua_CFunction &value);
+  static void push(lua_State *L, const std::string &value);
+  static void push(lua_State *L, const class object &value);
+  static void push(lua_State *L, const class proxy &value);
+  template <typename T>
+    static void push(lua_State *L, T *val, bool adopt = false);
+
+
 
   // ---------------------------------------------------------
   // inner class defintion
@@ -2201,12 +2126,12 @@ namespace luaport
 
 }
 
+// function implementation
 namespace luaport
 {
 
   // ------------------------------------------------------
   // function implementation
-
 
   template <typename T>
     inline std::string get_typename(lua_State *L)
@@ -2468,6 +2393,34 @@ namespace luaport
   }
 
 
+  // object of any value
+  template <typename T>
+    inline object::object(lua_State *L, const T &val)
+    : L(L), ref(LUA_REFNIL)
+  {
+    if (L)
+    {
+      luaport::push(L, val);
+      ref = luaL_ref(L, LUA_REGISTRYINDEX);
+//printf("REF (OBJ FROM T): %d\n", ref);
+//printf("TYPE: %s\n", lua_typename(L, type()));
+    }
+  }
+
+
+  // object of registered class
+  template <typename T>
+    inline object::object(lua_State *L, T *val, bool adopt)
+    : L(L), ref(LUA_REFNIL)
+  {
+    if (L)
+    {
+      luaport::push(L, val, adopt);
+      ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    }
+  }
+
+
   inline bool object::is_class() const
   {
 printf("IS CLASS?\n");
@@ -2525,6 +2478,93 @@ printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
     return proxy(L, ref_table, ref_key);
   }
 
+
+  // lua function call
+  inline object object::operator()()
+  {
+    this->push();
+    lua_call(L, 0, 1);
+    object result = from_stack(L, -1);
+    lua_pop(L, 1);
+    return result;
+  }
+  template <typename T1>
+    inline object object::operator()(T1 &arg1)
+  {
+    this->push();
+    luaport::push(L, arg1);
+    lua_call(L, 1, 1);
+    object result = from_stack(L, -1);
+    lua_pop(L, 1);
+    return result;
+  }
+  template <typename T1, typename T2>
+    inline object object::operator()(T1 &arg1, T2 &arg2)
+  {
+    this->push();
+    luaport::push(L, arg1);
+    luaport::push(L, arg2);
+    lua_call(L, 2, 1);
+    object result = from_stack(L, -1);
+    lua_pop(L, 1);
+    return result;
+  }
+  template <typename T1, typename T2, typename T3>
+    inline object object::operator()(T1 &arg1, T2 &arg2, T3 &arg3)
+  {
+    this->push();
+    luaport::push(L, arg1);
+    luaport::push(L, arg2);
+    luaport::push(L, arg3);
+    lua_call(L, 3, 1);
+    object result = from_stack(L, -1);
+    lua_pop(L, 1);
+    return result;
+  }
+
 }
+
+// proxy clas implementation
+namespace luaport
+{
+
+  // assignment
+  template <typename T>
+    inline void proxy::operator=(const T &val)
+  {
+//    if (ref_table == LUA_REFNIL)
+//    {
+//      luaL_error(L, "attempt to index a nil value");
+//      return;
+//    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
+    luaport::push(L, val);
+    lua_settable(L, -3);
+    lua_pop(L, 1);
+  }
+
+  // more index access
+  template <typename T>
+    inline proxy proxy::operator[](const T &key) const
+  {
+//        if (ref_table == LUA_REFNIL)
+//        {
+//          luaL_error(L, "attempt to index a nil value");
+//        }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
+    lua_gettable(L, -2);
+    int newtable = luaL_ref(L, LUA_REGISTRYINDEX);
+//printf("REF (TABLE): %d\n", newtable);
+    lua_pop(L, 1);
+    luaport::push(L, key);
+    int newkey = luaL_ref(L, LUA_REGISTRYINDEX);
+//printf("REF (KEY): %d\n", newkey);
+    return proxy(L, newtable, newkey);
+  }
+
+}
+
 
 #endif // _LUAPORT_HPP
