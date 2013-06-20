@@ -7,6 +7,7 @@
 // Author:      Akiva Miura <akiva.miura@gmail.com>
 // Modified by:
 // Created:     03/18/2013
+// Modified:    20/06/2013
 // Copyright:   (C) 2013 Akiva Miura
 // Licence:     MIT License
 /////////////////////////////////////////////////////////////////////////////
@@ -14,8 +15,7 @@
 #include <lua.hpp>
 #include <string>
 #include <typeinfo>
-
-//#include "aux.hpp"
+#include <cassert>
 
 namespace luaport
 {
@@ -49,8 +49,11 @@ namespace luaport
 
 
   // template class declarations
-  template <typename T>
-    class managed;
+  namespace detail
+  {
+    template <typename T>
+      class managed;
+  }
   template <typename T>
     class reference;
   template <typename T>
@@ -59,6 +62,7 @@ namespace luaport
 
   // class definitions
 
+  /// luaport exception class
   class exception : public std::exception
   {
     public:
@@ -97,6 +101,8 @@ namespace luaport
       iterator(const iterator &src)
         : L(src.L)
       {
+        assert(L != NULL);
+
         lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_table);
         ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
         lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_key);
@@ -112,7 +118,8 @@ namespace luaport
 
       bool clear()
       {
-        if (! L) { return false; }
+        assert(L != NULL);
+
         if (ref_key == LUA_REFNIL) { return false; }
 //printf("UNREF (KEY): %d\n", ref_key);
         luaL_unref(L, LUA_REGISTRYINDEX, ref_key);
@@ -188,23 +195,27 @@ namespace luaport
   };
 
 
+  /// lua object class
+  /**
+   * refers to lua object
+   */
   class object
   {
     public:
 
-      // Ctor (nil object with interpreter)
+      /// Ctor (nil object with interpreter)
       object(lua_State *L)
         : L(L), ref(LUA_REFNIL)
       {
       }
 
-      // Cor (nil object)
+      /// Cor (nil object)
       object()
         : L(NULL), ref(LUA_REFNIL)
       {
       }
 
-      // Ctor (object copying)
+      /// Ctor (object copying)
       object(const object &src)
       {
 //printf("COPY!\n");
@@ -226,7 +237,7 @@ namespace luaport
 //printf("MOVE!\n");
 //      }
 
-      // Ctor (from stack)
+      /// Ctor (from stack)
       object(const from_stack &s)
       {
 //printf("FROM STACK\n");
@@ -241,14 +252,14 @@ namespace luaport
         }
       }
 
-      // Ctor (from proxy)
+      /// Ctor (from proxy)
       object(const class proxy &p);
 
-      // Ctor (object of any value)
+      /// Ctor (object of any value)
       template <typename T>
         object(lua_State *L, const T &val);
 
-      // Ctor (object of registred class)
+      /// Ctor (object of registred class)
       template <typename T>
         object(lua_State *L, T *val, bool adopt = false);
 
@@ -708,7 +719,7 @@ printf("COPYING FROM REFERENCE!\n");
       bool reset(const reference<T> &ref)
       {
         ref.push();
-        u = (managed<T> *)lua_touserdata(ref.L, -1);
+        u = (detail::managed<T> *)lua_touserdata(ref.L, -1);
         lua_pop(ref.L, 1);
         return true;
       }
@@ -722,1439 +733,1485 @@ printf("COPYING FROM REFERENCE!\n");
 
 
     protected:
-      managed<T> *u;
+      detail::managed<T> *u;
   };
 
 
   // ---------------------------------------------------------
-  // inner function declaration
+  // detail function declaration
 
-  template <typename From, typename To>
-    static void* downcast(void *from);
+  namespace detail
+  {
 
-  static int lua_class_get_member(lua_State *L);
-  static int lua_class_set_member(lua_State *L);
-  inline static std::string lua_get_args_string(lua_State *L);
+    template <typename From, typename To>
+      static void* downcast(void *from);
 
-  // push funcs
-  static void push(lua_State *L, const bool &value);
-  static void push(lua_State *L, const char *val);
-  static void push(lua_State *L, const double &value);
-  static void push(lua_State *L, const int &value);
-  static void push(lua_State *L, const long &value);
-  static void push(lua_State *L, const unsigned long &value);
-  static void push(lua_State *L, const lua_CFunction &value);
-  static void push(lua_State *L, const std::string &value);
-  static void push(lua_State *L, const object &value);
-  static void push(lua_State *L, const proxy &value);
-  template <typename T>
-    static void push(lua_State *L, T *val, bool adopt = false);
+    static int lua_class_get_member(lua_State *L);
+    static int lua_class_set_member(lua_State *L);
+    inline static std::string lua_get_args_string(lua_State *L);
 
+    // push to the stack
+    static void push(lua_State *L, const bool &value);
+    static void push(lua_State *L, const char *val);
+    static void push(lua_State *L, const double &value);
+    static void push(lua_State *L, const int &value);
+    static void push(lua_State *L, const long &value);
+    static void push(lua_State *L, const unsigned long &value);
+    static void push(lua_State *L, const lua_CFunction &value);
+    static void push(lua_State *L, const std::string &value);
+    static void push(lua_State *L, const object &value);
+    static void push(lua_State *L, const proxy &value);
+    template <typename T>
+      static void push(lua_State *L, T *val, bool adopt);
+  //  template <typename T>
+  //    static void push(lua_State *L, T *val, bool adopt = false);
+
+  } // namespace detail
 
 
   // ---------------------------------------------------------
-  // inner class defintion
+  // detail class defintion
 
-  template <typename T, T arg>
-    struct caller;
-
-  template <typename T>
-    struct casttype;
-
-  template <typename T, T arg>
-    struct cfunc_hold;
-
-  template <typename T>
-    struct finalizer
+  namespace detail
   {
-    static int lfunc(lua_State *L);
-  };
-  template <typename T>
-    struct finalizer<T *>
-  {
-    static int lfunc(lua_State *L);
-  };
+    /// @cond DETAIL
 
-  template <typename T>
-    struct functype_hold
-  {
-    template <T func>
-      lua_CFunction get_lfunc()
+    template <typename T, T arg>
+      struct call_traits;
+
+    template <typename T>
+      struct cast_traits;
+
+    template <typename T, T arg>
+      struct cfunc_traits;
+
+    template <typename T>
+      struct finalizer
     {
-      return cfunc_hold<T, func>::lfunc;
-    }
-  };
-
-  template <typename T>
-    class managed
-  {
-    public:
-      managed(lua_State *L, T *p, bool adopt)
-        : L(L), p(p), adopt(adopt) { }
-      virtual ~managed();
-
-      // placement new
-      static void* operator new(std::size_t, lua_State *L);
-
-      T *p;
-      lua_State *L;
-      bool adopt;
-  };
-
-  template <typename T>
-    struct typehold
-  {
-    typedef T natural;
-    static std::string name(lua_State *L);
-  };
-  template <typename T>
-    struct typehold<T &>
-  {
-    typedef T natural;
-    static std::string name(lua_State *L);
-  };
-  template <typename T>
-    struct typehold<const T&>
-  {
-    typedef T natural;
-    static std::string name(lua_State *L);
-  };
-
-
-  // ------------------------------------------------------
-  // inner function implementation
-
-
-  template <typename From, typename To>
-    inline static void* downcast(void *from)
-  {
-    From *f = (From *)from;
-//printf("CAST FROM: %p\n", f);
-    To *to = f;
-//printf("CAST TO: %p\n", to);
-    return to;
-  }
-
-
-  template <typename T>
-    inline functype_hold<T*> get_functype(T *func)
-  {
-    return functype_hold<T*>();
-  }
-  template <typename C, typename T>
-    inline functype_hold<T (C::*)> get_functype(T (C::*func))
-  {
-    return functype_hold<T (C::*)>();
-  }
-
-  inline static int lua_class_create(lua_State *L)
-  {
-    printf("CALL!\n");
-    luaL_checktype(L, 1, LUA_TTABLE);
-    object c = from_stack(L, 1);
-    object init = c["__init"];
-    if (init.type() != LUA_TFUNCTION)
+      static int lfunc(lua_State *L);
+    };
+    template <typename T>
+      struct finalizer<T *>
     {
-      luaL_error(L, "__init method is not defined\n");
-      return 0;
-    }
+      static int lfunc(lua_State *L);
+    };
 
-    lua_newuserdata(L, 0);
-    object m = newtable(L);
-    m["class"] = c;
-    m["luaport"] = true;
-    m["members"] = newtable(L);
-    m["__gc"] = finalizer<void>::lfunc;
-    m["__index"] = lua_class_get_member;
-    m["__newindex"] = lua_class_set_member;
-    m.push();
-    lua_setmetatable(L, -2);
-
-    object u = from_stack(L, -1);
-    printf("U: %s\n", (const char *)u);
-    init(u);
-    return 1;
-  }
-
-
-  inline static void lua_error_signature
-    (lua_State *L, const std::string &sig)
-  {
-    std::string msg;
-    msg += "signature: " + sig + "\n";
-    msg += "but got: " + lua_get_args_string(L);
-    luaL_error(L, "%s", msg.c_str());
-  }
-
-
-  inline static std::string lua_get_args_string(lua_State *L)
-  {
-    int nargs = lua_gettop(L);
-    std::string args = "(";
-    for (int i = 1; i <= nargs; i++)
+    template <typename T>
+      struct functype_hold
     {
-      if (i > 1) { args += ", "; }
-      int type = lua_type(L, i);
-      if (type == LUA_TUSERDATA)
+      template <T func>
+        lua_CFunction get_lfunc()
       {
-        object m = object(from_stack(L, i)).getmetatable();
-        if (! m["luaport"].is_valid())
+        return cfunc_traits<T, func>::lfunc;
+      }
+    };
+
+    template <typename T>
+      class managed
+    {
+      public:
+        managed(lua_State *L, T *p, bool adopt)
+          : L(L), p(p), adopt(adopt) { }
+        virtual ~managed();
+
+        // placement new
+        static void* operator new(std::size_t, lua_State *L);
+
+        T *p;
+        lua_State *L;
+        bool adopt;
+    };
+
+    template <typename T>
+      struct type_traits
+    {
+      typedef T natural;
+      static std::string name(lua_State *L);
+    };
+    template <typename T>
+      struct type_traits<T &>
+    {
+      typedef T natural;
+      static std::string name(lua_State *L);
+    };
+    template <typename T>
+      struct type_traits<const T&>
+    {
+      typedef T natural;
+      static std::string name(lua_State *L);
+    };
+
+    /// @endcond DETAIL
+  }
+
+} // namespace luaport
+
+
+// ------------------------------------------------------
+// inner function implementation
+namespace luaport
+{
+  namespace detail
+  {
+
+    template <typename From, typename To>
+      inline static void* downcast(void *from)
+    {
+      From *f = (From *)from;
+  //printf("CAST FROM: %p\n", f);
+      To *to = f;
+  //printf("CAST TO: %p\n", to);
+      return to;
+    }
+
+
+    template <typename T>
+      inline functype_hold<T*> get_functype(T *func)
+    {
+      return functype_hold<T*>();
+    }
+    template <typename C, typename T>
+      inline functype_hold<T (C::*)> get_functype(T (C::*func))
+    {
+      return functype_hold<T (C::*)>();
+    }
+
+    inline static int lua_class_create(lua_State *L)
+    {
+      printf("CALL!\n");
+      luaL_checktype(L, 1, LUA_TTABLE);
+      object c = from_stack(L, 1);
+      object init = c["__init"];
+      if (init.type() != LUA_TFUNCTION)
+      {
+        luaL_error(L, "__init method is not defined\n");
+        return 0;
+      }
+
+      lua_newuserdata(L, 0);
+      object m = newtable(L);
+      m["class"] = c;
+      m["luaport"] = true;
+      m["members"] = newtable(L);
+      m["__gc"] = finalizer<void>::lfunc;
+      m["__index"] = lua_class_get_member;
+      m["__newindex"] = lua_class_set_member;
+      m.push();
+      lua_setmetatable(L, -2);
+
+      object u = from_stack(L, -1);
+      printf("U: %s\n", (const char *)u);
+      init(u);
+      return 1;
+    }
+
+
+    inline static void lua_error_signature
+      (lua_State *L, const std::string &sig)
+    {
+      std::string msg;
+      msg += "signature: " + sig + "\n";
+      msg += "but got: " + lua_get_args_string(L);
+      luaL_error(L, "%s", msg.c_str());
+    }
+
+
+    inline static std::string lua_get_args_string(lua_State *L)
+    {
+      int nargs = lua_gettop(L);
+      std::string args = "(";
+      for (int i = 1; i <= nargs; i++)
+      {
+        if (i > 1) { args += ", "; }
+        int type = lua_type(L, i);
+        if (type == LUA_TUSERDATA)
         {
-          args += "<unknown udata>";
+          object m = object(from_stack(L, i)).getmetatable();
+          if (! m["luaport"].is_valid())
+          {
+            args += "<unknown udata>";
+          }
+          else
+          {
+            object class_to_name = registry(L)["luaport"]["class_to_name"];
+            object name = class_to_name[m["class"]];
+            args += (const char *)name;
+          }
         }
         else
         {
-          object class_to_name = registry(L)["luaport"]["class_to_name"];
-          object name = class_to_name[m["class"]];
-          args += (const char *)name;
+          args += lua_typename(L, type);
         }
       }
-      else
-      {
-        args += lua_typename(L, type);
-      }
+      args += ")";
+      return args;
     }
-    args += ")";
-    return args;
-  }
 
 
-  inline static int lua_class_get_member(lua_State *L)
-  {
-    // ins (arg1) is instance
-    // field (arg2) is field name
-    // meta (stack3) = getmetatable(ins)
-    lua_getmetatable(L, 1);
-    // mem (stack4) = rawget(meta, "members")
-    lua_pushstring(L, "members");
-    lua_rawget(L, 3);
-    // if type(mem) == "table" then
-    if (lua_type(L, 4) == LUA_TTABLE)
+    inline static int lua_class_get_member(lua_State *L)
     {
-      // val (stack5) = rawget(mem, field)
-      lua_pushvalue(L, 2);
-      lua_rawget(L, 4);
-      // if val ~= nil
-      if (! lua_isnil(L, 5))
+      // ins (arg1) is instance
+      // field (arg2) is field name
+      // meta (stack3) = getmetatable(ins)
+      lua_getmetatable(L, 1);
+      // mem (stack4) = rawget(meta, "members")
+      lua_pushstring(L, "members");
+      lua_rawget(L, 3);
+      // if type(mem) == "table" then
+      if (lua_type(L, 4) == LUA_TTABLE)
       {
+        // val (stack5) = rawget(mem, field)
+        lua_pushvalue(L, 2);
+        lua_rawget(L, 4);
+        // if val ~= nil
+        if (! lua_isnil(L, 5))
+        {
+          // return val
+          lua_replace(L, 3);
+          lua_pop(L, 1);
+          return 1;
+        }
+        lua_pop(L, 1);
+        // stack top -> 4
+      }
+      // class (stack5) = rawget(meta, "class")
+      lua_pushstring(L, "class");
+      lua_rawget(L, 3);
+      if (lua_istable(L, 5))
+      {
+        // val (stack6) = class["get_" .. field]
+        lua_pushstring(L, "get_");
+        lua_pushvalue(L, 2);
+        lua_concat(L, 2);
+        lua_gettable(L, 5);
+        // if val ~= nil then
+        if (lua_isfunction(L, 6))
+        {
+          // val (stack6) = val(instance)
+          lua_pushvalue(L, 1);
+          lua_call(L, 1, 1);
+          // return val
+          lua_replace(L, 3);
+          lua_pop(L, 2);
+          return 1;
+        }
+        // val (stack7) = class[field]
+        lua_pushvalue(L, 2);
+        lua_gettable(L, 5);
         // return val
         lua_replace(L, 3);
-        lua_pop(L, 1);
+        lua_pop(L, 3);
         return 1;
       }
-      lua_pop(L, 1);
-      // stack top -> 4
+      return 0;
     }
-    // class (stack5) = rawget(meta, "class")
-    lua_pushstring(L, "class");
-    lua_rawget(L, 3);
-    if (lua_istable(L, 5))
+
+
+    inline static int lua_class_set_member(lua_State *L)
     {
-      // val (stack6) = class["get_" .. field]
+      // ins (arg1) is instance
+      // field (arg2) is field name
+      // val (arg3) is value
+      // meta (stack4) = getmetatable(ins)
+      lua_getmetatable(L, 1);
+      // class (stack5) = rawget(meta, "class")
+      lua_pushstring(L, "class");
+      lua_rawget(L, 4);
+      // getter (stack6) = class["get_" .. field]
       lua_pushstring(L, "get_");
       lua_pushvalue(L, 2);
       lua_concat(L, 2);
       lua_gettable(L, 5);
-      // if val ~= nil then
-      if (lua_isfunction(L, 6))
-      {
-        // val (stack6) = val(instance)
-        lua_pushvalue(L, 1);
-        lua_call(L, 1, 1);
-        // return val
-        lua_replace(L, 3);
-        lua_pop(L, 2);
-        return 1;
-      }
-      // val (stack7) = class[field]
+      // setter (stack7) = class["set_" .. field]
+      lua_pushstring(L, "set_");
       lua_pushvalue(L, 2);
+      lua_concat(L, 2);
       lua_gettable(L, 5);
-      // return val
-      lua_replace(L, 3);
-      lua_pop(L, 3);
-      return 1;
-    }
-    return 0;
-  }
-
-
-  inline static int lua_class_set_member(lua_State *L)
-  {
-    // ins (arg1) is instance
-    // field (arg2) is field name
-    // val (arg3) is value
-    // meta (stack4) = getmetatable(ins)
-    lua_getmetatable(L, 1);
-    // class (stack5) = rawget(meta, "class")
-    lua_pushstring(L, "class");
-    lua_rawget(L, 4);
-    // getter (stack6) = class["get_" .. field]
-    lua_pushstring(L, "get_");
-    lua_pushvalue(L, 2);
-    lua_concat(L, 2);
-    lua_gettable(L, 5);
-    // setter (stack7) = class["set_" .. field]
-    lua_pushstring(L, "set_");
-    lua_pushvalue(L, 2);
-    lua_concat(L, 2);
-    lua_gettable(L, 5);
-    // if type(getter) == 'function' and type(setter) ~= 'function' then
-    if (lua_isfunction(L, 6) && ! lua_isfunction(L, 7) )
-    {
-      // field (stack8) = tostring(arg2)
-      const char *field = luaL_tolstring(L, 2, NULL);
-      luaL_error(L, "method: set_%s is not defined", field);
-      lua_pop(L, 6);
-      return 0;
-    }
-    // if type(setter) == 'function' then
-    if (lua_isfunction(L, 7))
-    {
-      // setter(ins, val)
-      lua_pushvalue(L, 1);
+      // if type(getter) == 'function' and type(setter) ~= 'function' then
+      if (lua_isfunction(L, 6) && ! lua_isfunction(L, 7) )
+      {
+        // field (stack8) = tostring(arg2)
+        const char *field = luaL_tolstring(L, 2, NULL);
+        luaL_error(L, "method: set_%s is not defined", field);
+        lua_pop(L, 6);
+        return 0;
+      }
+      // if type(setter) == 'function' then
+      if (lua_isfunction(L, 7))
+      {
+        // setter(ins, val)
+        lua_pushvalue(L, 1);
+        lua_pushvalue(L, 3);
+        lua_call(L, 2, 0);
+        // stack top -> 6
+        // return
+        lua_pop(L, 4);
+        return 0;
+      }
+      // mem (arg8) = rawget(meta, "members")
+      lua_pushstring(L, "members");
+      lua_rawget(L, 4);
+      // mem[field] = val
+      lua_pushvalue(L, 2);
       lua_pushvalue(L, 3);
-      lua_call(L, 2, 0);
-      // stack top -> 6
+      lua_rawset(L, 8);
+      // stck top -> 7
       // return
-      lua_pop(L, 4);
+      lua_pop(L, 5);
       return 0;
     }
-    // mem (arg8) = rawget(meta, "members")
-    lua_pushstring(L, "members");
-    lua_rawget(L, 4);
-    // mem[field] = val
-    lua_pushvalue(L, 2);
-    lua_pushvalue(L, 3);
-    lua_rawset(L, 8);
-    // stck top -> 7
-    // return
-    lua_pop(L, 5);
-    return 0;
-  }
 
-}
+  } // namespace detail
+
+} // namespace luaport
 
 // push function implementation
 namespace luaport
 {
-  inline void push(lua_State *L, const bool &val)
-  {
-    lua_pushboolean(L, val);
-  }
-  inline void push(lua_State *L, const char *val)
-  {
-    lua_pushstring(L, val);
-  }
-  inline void push(lua_State *L, const double &val)
-  {
-    lua_pushnumber(L, val);
-  }
-  inline void push(lua_State *L, const int &val)
-  {
-    lua_pushinteger(L, val);
-  }
-  inline void push(lua_State *L, const long &val)
-  {
-    lua_pushinteger(L, val);
-  }
-  inline void push(lua_State *L, const unsigned long &val)
-  {
-    lua_pushinteger(L, val);
-  }
-  inline void push(lua_State *L, const lua_CFunction &val)
-  {
-    lua_pushcfunction(L, val);
-  }
-  inline void push(lua_State *L, const object &val)
-  {
-    return val.push(L);
-  }
-  inline void push(lua_State *L, const proxy &val)
-  {
-    return object(val).push(L);
-  }
-  inline void push(lua_State *L, const std::string &val)
-  {
-    lua_pushlstring(L, val.data(), val.length());
-  }
-  template <typename T>
-    inline void push(lua_State *L, T *val, bool adopt)
-  {
-printf("PUSH UDATA: %p\n", val);
-    managed<T> *u = new(L) managed<T>(L, val, adopt);
-    object c = get_class<T>(L);
-    if (! c.is_valid())
-    {
-      std::string msg = "unregistered class: ";
-      throw luaport::exception(msg + typeid(T).name());
-    }
-    object m = newtable(L);
-    m["class"] = c;
-    m["luaport"] = true;
-    m["members"] = newtable(L);
-    m["__gc"] = finalizer<managed<T>*>::lfunc;
-    m["__index"] = lua_class_get_member;
-    m["__newindex"] = lua_class_set_member;
-    m.push();
-    lua_setmetatable(L, -2);
+  using namespace detail;
 
-    printf("REGISTER REFERENCE: %p\n", val);
-    object ref = registry(L)["luaport"]["references"];
-    object count = ref[lightuserdata(L, val)];
-    if (adopt)
+  namespace detail
+  {
+    inline void push(lua_State *L, const bool &val)
     {
-      if (count.type() == LUA_TNUMBER)
+      lua_pushboolean(L, val);
+    }
+    inline void push(lua_State *L, const char *val)
+    {
+      lua_pushstring(L, val);
+    }
+    inline void push(lua_State *L, const double &val)
+    {
+      lua_pushnumber(L, val);
+    }
+    inline void push(lua_State *L, const int &val)
+    {
+      lua_pushinteger(L, val);
+    }
+    inline void push(lua_State *L, const long &val)
+    {
+      lua_pushinteger(L, val);
+    }
+    inline void push(lua_State *L, const unsigned long &val)
+    {
+      lua_pushinteger(L, val);
+    }
+    inline void push(lua_State *L, const lua_CFunction &val)
+    {
+      lua_pushcfunction(L, val);
+    }
+    inline void push(lua_State *L, const object &val)
+    {
+      return val.push(L);
+    }
+    inline void push(lua_State *L, const proxy &val)
+    {
+      return object(val).push(L);
+    }
+    inline void push(lua_State *L, const std::string &val)
+    {
+      lua_pushlstring(L, val.data(), val.length());
+    }
+    // avoiding from the compiler confusing
+    template <>
+      inline void push(lua_State *L, lua_CFunction val, bool adopt)
+    {
+      lua_pushcfunction(L, val);
+    }
+    template <typename T>
+      inline void push(lua_State *L, T *val, bool adopt)
+    {
+  printf("PUSH UDATA: %p\n", val);
+      managed<T> *u = new(L) managed<T>(L, val, adopt);
+      object c = get_class<T>(L);
+      if (! c.is_valid())
       {
-        int c = object_cast<int>(count);
-        printf("COUNT (BEFORE): %d\n", c);
-        c++;
-        ref[lightuserdata(L, val)] = c;
-        printf("COUNT (AFTER): %d\n", c);
+        std::string msg = "unregistered class: ";
+        throw luaport::exception(msg + typeid(T).name());
+      }
+      object m = newtable(L);
+      m["class"] = c;
+      m["luaport"] = true;
+      m["members"] = newtable(L);
+      m["__gc"] = finalizer<managed<T>*>::lfunc;
+      m["__index"] = lua_class_get_member;
+      m["__newindex"] = lua_class_set_member;
+      m.push();
+      lua_setmetatable(L, -2);
+
+      printf("REGISTER REFERENCE: %p\n", val);
+      object ref = registry(L)["luaport"]["references"];
+      object count = ref[lightuserdata(L, val)];
+      if (adopt)
+      {
+        if (count.type() == LUA_TNUMBER)
+        {
+          int c = object_cast<int>(count);
+          printf("COUNT (BEFORE): %d\n", c);
+          c++;
+          ref[lightuserdata(L, val)] = c;
+          printf("COUNT (AFTER): %d\n", c);
+        }
+        else
+        {
+          printf("COUNT (BEFORE): NIL\n");
+          ref[lightuserdata(L, val)] = 1;
+          printf("COUNT (AFTER): 1\n");
+        }
       }
       else
       {
-        printf("COUNT (BEFORE): NIL\n");
-        ref[lightuserdata(L, val)] = 1;
-        printf("COUNT (AFTER): 1\n");
+        if (! ref[lightuserdata(L, val)])
+        {
+          ref[lightuserdata(L, val)] = 0;
+        }
       }
+  //printf("TYPE: %s\n", lua_typename(L, lua_type(L, -1)));
     }
-    else
-    {
-      if (! ref[lightuserdata(L, val)])
-      {
-        ref[lightuserdata(L, val)] = 0;
-      }
-    }
-//printf("TYPE: %s\n", lua_typename(L, lua_type(L, -1)));
-  }
 
-}
+  } // namespace detail
+
+} // namespace luaport
+
 
 // -----------------------------------------------------
 // inner class implementation
 
-// caller class implementation
 namespace luaport
 {
+  // call_traits struct implementation
+  namespace detail
+  {
+    /// @cond DETAIL
 
-  // caller 0
-  template <typename R, R (*f)(lua_State*)>
-    struct caller<R (*)(lua_State*), f>
-  {
-    static int call(lua_State *L)
-    {
-      luaport::push(L, (*f)(L)) ;
-      return 1;
-    }
-  };
-  template <void (*f)(lua_State*)>
-    struct caller<void (*)(lua_State*), f>
-  {
-    static int call(lua_State *L)
-    {
-      (*f)(L);
-      return 0;
-    }
-  };
-  // caller 1
-  template <typename R, typename T1, R (*f)(lua_State*,T1)>
-    struct caller<R (*)(lua_State*,T1), f>
-  {
-    static int call(lua_State *L, T1 a1)
-    {
-      luaport::push(L, (*f)(L, a1) );
-      return 1;
-    }
-  };
-  template <typename T1, void (*f)(lua_State*,T1)>
-    struct caller<void (*)(lua_State*,T1), f>
-  {
-    static int call(lua_State *L, T1 a1)
-    {
-      (*f)(L, a1);
-      return 0;
-    }
-  };
-  // caller 2
-  template <typename R, typename T1,
-            typename T2, R (*f)(lua_State*, T1, T2)>
-    struct caller<R (*)(lua_State*, T1, T2), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2)
-    {
-      luaport::push(L, (*f)(L, a1, a2) );
-      return 1;
-    }
-  };
-  template <typename T1, typename T2,
-            void (*f)(lua_State*, T1, T2)>
-    struct caller<void (*)(lua_State*, T1, T2), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2)
-    {
-      (*f)(L, a1, a2);
-      return 0;
-    }
-  };
-  // caller 3
-  template <typename R, typename T1, typename T2, typename T3,
-            R (*f)(lua_State*, T1, T2, T3)>
-    struct caller<R (*)(lua_State*, T1, T2, T3), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3)
-    {
-      luaport::push(L, (*f)(L, a1, a2, a3) );
-      return 1;
-    }
-  };
-  template <typename T1, typename T2, typename T3,
-            void (*f)(lua_State*, T1, T2, T3)>
-    struct caller<void (*)(lua_State*, T1, T2, T3), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3)
-    {
-      (*f)(L, a1, a2, a3);
-      return 0;
-    }
-  };
-  // caller 4
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            R (*f)(lua_State*, T1, T2, T3, T4)>
-    struct caller<R (*)(lua_State*, T1, T2, T3, T4), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4)
-    {
-      luaport::push(L, (*f)(L, a1, a2, a3, a4) );
-      return 1;
-    }
-  };
-  template <typename T1, typename T2, typename T3, typename T4,
-            void (*f)(lua_State*, T1, T2, T3, T4)>
-    struct caller<void (*)(lua_State*, T1, T2, T3, T4), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4)
-    {
-      (*f)(L, a1, a2, a3, a4);
-      return 0;
-    }
-  };
-  // caller 5
-  template <typename R, typename T1, typename T2, typename T3,
-            typename T4, typename T5,
-            R (*f)(lua_State*, T1, T2, T3, T4, T5)>
-    struct caller<R (*)(lua_State*, T1, T2, T3, T4, T5), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
-    {
-      luaport::push(L, (*f)(L, a1, a2, a3, a4, a5) );
-      return 1;
-    }
-  };
-  template <typename T1, typename T2, typename T3, typename T4,
-            typename T5, void (*f)(lua_State*, T1, T2, T3, T4, T5)>
-    struct caller<void (*)(lua_State*, T1, T2, T3, T4, T5), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
-    {
-      (*f)(L, a1, a2, a3, a4, a5);
-      return 0;
-    }
-  };
-  // caller 6
-  template <typename R, typename T1, typename T2, typename T3,
-            typename T4, typename T5, typename T6,
-            R (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
-    struct caller<R (*)(lua_State*, T1, T2, T3, T4, T5, T6), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
-    {
-      luaport::push(L, (*f)(L, a1, a2, a3, a4, a5, a6) );
-      return 1;
-    }
-  };
-  template <typename T1, typename T2, typename T3, typename T4,
-            typename T5, typename T6,
-            void (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
-    struct caller<void (*)(lua_State*, T1, T2, T3, T4, T5, T6), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
-    {
-      (*f)(L, a1, a2, a3, a4, a5, a6);
-      return 0;
-    }
-  };
-  // caller 7
-  template <typename R, typename T1, typename T2, typename T3,
-            typename T4, typename T5, typename T6, typename T7,
-            R (*f)(lua_State*, T1, T2, T3, T4, T5, T6, T7)>
-    struct caller<R (*)(lua_State*, T1, T2, T3, T4, T5, T6, T7), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
-    {
-      luaport::push(L, (*f)(L, a1, a2, a3, a4, a5, a6, a7) );
-      return 1;
-    }
-  };
-  template <typename T1, typename T2, typename T3, typename T4,
-            typename T5, typename T6, typename T7,
-            void (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
-    struct caller<void (*)(lua_State*, T1, T2, T3, T4, T5, T6, T7), f>
-  {
-    static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
-    {
-      (*f)(L, a1, a2, a3, a4, a5, a6, a7);
-      return 0;
-    }
-  };
-
-}
-
-// cfund_hold class implementation
-namespace luaport
-{
-  // cfunc_hold 0
-  template <typename R, R (*f)(lua_State*)>
-    struct cfunc_hold<R (*)(lua_State*), f>
-  {
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) + " ()";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        return caller<R (*)(lua_State*), f>::call(L);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L) );
-      }
-      return 0;
-    }
-  };
-  template <typename R, R (*f)()>
-    struct cfunc_hold<R (*)(), f>
-  {
-    typedef cfunc_hold<R (*)(),f> thisclass;
-    static R wrap(lua_State *L)
-    {
-      return f();
-    }
-    static int lfunc(lua_State *L)
-    {
-      cfunc_hold<R (*)(lua_State*), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, R (C::*m)()>
-    struct cfunc_hold<R (C::*)(), m>
-  {
-    typedef cfunc_hold<R (C::*)(),m> thisclass;
-    static R flatten(C *c)
-    {
-      return (c->*m)();
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, R (C::*m)() const>
-    struct cfunc_hold<R (C::*)() const, m>
-  {
-    typedef cfunc_hold<R (C::*)() const,m> thisclass;
-    static R flatten(C *c)
-    {
-      return (c->*m)();
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 1
-  template <typename R, typename T1, R (*f)(lua_State*,T1)>
-    struct cfunc_hold<R (*)(lua_State*,T1), f>
-  {
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) +
-             " (" + get_typename<T1>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural arg1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        return caller<R (*)(lua_State*,T1), f>::call(L, arg1);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L) );
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, R (*f)(T1)>
-    struct cfunc_hold<R (*)(T1), f>
-  {
-    typedef cfunc_hold<R (*)(T1),f> thisclass;
-    static R wrap(lua_State *L, T1 a1)
-    {
-      return f(a1);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, R (C::*m)(T1)>
-    struct cfunc_hold<R (C::*)(T1), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1), m> thisclass;
-    static R flatten(C *c, T1 a1)
-    {
-      return (c->*m)(a1);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, R (C::*m)(T1) const>
-    struct cfunc_hold<R (C::*)(T1) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1) const, m> thisclass;
-    static R flatten(C *c, T1 a1)
-    {
-      return (c->*m)(a1);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 2
-  template <typename R, typename T1, typename T2,
-            R (*f)(lua_State*, T1, T2)>
-    struct cfunc_hold<R (*)(lua_State*, T1, T2), f>
-  {
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) +
-             " (" + get_typename<T1>(L) +
-             ", " + get_typename<T2>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural arg1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        typename typehold<T2>::natural arg2 =
-          object_cast<typename typehold<T2>::natural>(from_stack(L, 2));
-        return caller<R (*)(lua_State*,T1, T2), f>::call(L, arg1, arg2);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L) );
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, typename T2, R (*f)(T1, T2)>
-    struct cfunc_hold<R (*)(T1, T2), f>
-  {
-    typedef cfunc_hold<R (*)(T1,T2),f> thisclass;
-    static R wrap(lua_State *L, T1 a1, T2 a2)
-    {
-      return f(a1, a2);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1,T2), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2,
-            R (C::*m)(T1, T2)>
-    struct cfunc_hold<R (C::*)(T1, T2), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2),m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2)
-    {
-      return (c->*m)(a1, a2);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2,
-            R (C::*m)(T1, T2) const>
-    struct cfunc_hold<R (C::*)(T1, T2) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2) const,m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2)
-    {
-      return (c->*m)(a1, a2);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 3
-  template <typename R, typename T1, typename T2, typename T3,
-            R (*f)(lua_State*, T1, T2, T3)>
-    struct cfunc_hold<R (*)(lua_State*, T1, T2, T3), f>
-  {
-    typedef R (*ftype)(lua_State*,T1,T2,T3);
-    static std::string sign(lua_State *L)
-    {
-     return get_typename<R>(L) +
-            " (" + get_typename<T1>(L) +
-            ", " + get_typename<T2>(L) +
-            ", " + get_typename<T3>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural arg1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        typename typehold<T2>::natural arg2 =
-          object_cast<typename typehold<T2>::natural>(from_stack(L, 2));
-        typename typehold<T3>::natural arg3 =
-          object_cast<typename typehold<T3>::natural>(from_stack(L, 3));
-        return caller<ftype, f>::call(L, arg1, arg2, arg3);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L) );
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, typename T2, typename T3, R (*f)(T1, T2, T3)>
-    struct cfunc_hold<R (*)(T1, T2, T3), f>
-  {
-    typedef cfunc_hold<R (*)(T1,T2,T3),f> thisclass;
-    static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3)
-    {
-      return f(a1, a2, a3);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1,T2,T3), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            R (C::*m)(T1, T2, T3)>
-    struct cfunc_hold<R (C::*)(T1, T2, T3), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3),m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3)
-    {
-      return (c->*m)(a1, a2, a3);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            R (C::*m)(T1, T2, T3) const>
-    struct cfunc_hold<R (C::*)(T1, T2, T3) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3) const,m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3)
-    {
-      return (c->*m)(a1, a2, a3);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 4
-  template <typename R, typename T1, typename T2, typename T3,
-            typename T4, R (*f)(lua_State*, T1, T2, T3, T4)>
-    struct cfunc_hold<R (*)(lua_State*, T1, T2, T3, T4), f>
-  {
-    typedef R (*ftype)(lua_State*,T1,T2,T3,T4);
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) +
-             " (" + get_typename<T1>(L) +
-             ", " + get_typename<T2>(L) +
-             ", " + get_typename<T3>(L) +
-             ", " + get_typename<T4>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural arg1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        typename typehold<T2>::natural arg2 =
-          object_cast<typename typehold<T2>::natural>(from_stack(L, 2));
-        typename typehold<T3>::natural arg3 =
-          object_cast<typename typehold<T3>::natural>(from_stack(L, 3));
-        typename typehold<T4>::natural arg4 =
-          object_cast<typename typehold<T4>::natural>(from_stack(L, 4));
-        return caller<ftype, f>::call(L, arg1, arg2, arg3, arg4);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L));
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, typename T2, typename T3,
-            typename T4, R (*f)(T1, T2, T3, T4)>
-    struct cfunc_hold<R (*)(T1, T2, T3, T4), f>
-  {
-    typedef cfunc_hold<R (*)(T1,T2,T3,T4),f> thisclass;
-    static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4)
-    {
-      return f(a1, a2, a3, a4);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1,T2,T3,T4), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, R (C::*m)(T1, T2, T3, T4)>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4),m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4)
-    {
-      return (c->*m)(a1, a2, a3, a4);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, R (C::*m)(T1, T2, T3, T4) const>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4) const,m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4)
-    {
-      return (c->*m)(a1, a2, a3, a4);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 5
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            typename T5, R (*f)(lua_State*, T1, T2, T3, T4, T5)>
-    struct cfunc_hold<R (*)(lua_State*, T1, T2, T3, T4, T5), f>
-  {
-    typedef R (*ftype)(lua_State*,T1,T2,T3,T4,T5);
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) +
-             " (" + get_typename<T1>(L) +
-             ", " + get_typename<T2>(L) +
-             ", " + get_typename<T3>(L) +
-             ", " + get_typename<T4>(L) +
-             ", " + get_typename<T5>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural arg1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        typename typehold<T2>::natural arg2 =
-          object_cast<typename typehold<T2>::natural>(from_stack(L, 2));
-        typename typehold<T3>::natural arg3 =
-          object_cast<typename typehold<T3>::natural>(from_stack(L, 3));
-        typename typehold<T4>::natural arg4 =
-          object_cast<typename typehold<T4>::natural>(from_stack(L, 4));
-        typename typehold<T5>::natural arg5 =
-          object_cast<typename typehold<T5>::natural>(from_stack(L, 5));
-        return caller<ftype, f>::call(L, arg1, arg2, arg3, arg4, arg5);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L));
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            typename T5, R (*f)(T1, T2, T3, T4, T5)>
-    struct cfunc_hold<R (*)(T1, T2, T3, T4, T5), f>
-  {
-    typedef cfunc_hold<R (*)(T1,T2,T3,T4,T5),f> thisclass;
-    static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
-    {
-      return f(a1, a2, a3, a4, a5);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1,T2,T3,T4,T5), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, typename T5, R (C::*m)(T1, T2, T3, T4, T5)>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4, T5), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4,T5),m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
-    {
-      return (c->*m)(a1, a2, a3, a4, a5);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4,T5), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, typename T5, R (C::*m)(T1, T2, T3, T4, T5) const>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4, T5) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4,T5) const,m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
-    {
-      return (c->*m)(a1, a2, a3, a4, a5);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4,T5), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 6
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            typename T5, typename T6,
-            R (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
-    struct cfunc_hold<R (*)(lua_State*, T1, T2, T3, T4, T5, T6), f>
-  {
-    typedef R (*ftype)(lua_State*,T1,T2,T3,T4,T5,T6);
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) +
-             " (" + get_typename<T1>(L) +
-             ", " + get_typename<T2>(L) +
-             ", " + get_typename<T3>(L) +
-             ", " + get_typename<T4>(L) +
-             ", " + get_typename<T5>(L) +
-             ", " + get_typename<T6>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural a1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        typename typehold<T2>::natural a2 =
-          object_cast<typename typehold<T2>::natural>(from_stack(L, 2));
-        typename typehold<T3>::natural a3 =
-          object_cast<typename typehold<T3>::natural>(from_stack(L, 3));
-        typename typehold<T4>::natural a4 =
-          object_cast<typename typehold<T4>::natural>(from_stack(L, 4));
-        typename typehold<T5>::natural a5 =
-          object_cast<typename typehold<T5>::natural>(from_stack(L, 5));
-        typename typehold<T6>::natural a6 =
-          object_cast<typename typehold<T6>::natural>(from_stack(L, 6));
-        return caller<ftype, f>::call(L,a1,a2,a3,a4,a5,a6);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L));
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            typename T5, typename T6, R (*f)(T1, T2, T3, T4, T5, T6)>
-    struct cfunc_hold<R (*)(T1, T2, T3, T4, T5, T6), f>
-  {
-    typedef cfunc_hold<R (*)(T1,T2,T3,T4,T5,T6),f> thisclass;
-    static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
-    {
-      return f(a1, a2, a3, a4, a5, a6);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1,T2,T3,T4,T5,T6), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, typename T5, typename T6,
-            R (C::*m)(T1, T2, T3, T4, T5, T6)>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4, T5, T6), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4,T5,T6),m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
-    {
-      return (c->*m)(a1,a2,a3,a4,a5,a6);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4,T5,T6), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, typename T5, typename T6,
-            R (C::*m)(T1, T2, T3, T4, T5, T6) const>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4, T5, T6) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4,T5,T6) const,m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
-    {
-      return (c->*m)(a1,a2,a3,a4,a5,a6);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4,T5,T6), thisclass::flatten>::lfunc(L);
-    }
-  };
-  // cfunc_hold 7
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            typename T5, typename T6, typename T7,
-            R (*f)(lua_State*, T1, T2, T3, T4, T5, T6, T7)>
-    struct cfunc_hold<R (*)(lua_State*, T1, T2, T3, T4, T5, T6, T7), f>
-  {
-    typedef R (*ftype)(lua_State*,T1,T2,T3,T4,T5,T6,T7);
-    static std::string sign(lua_State *L)
-    {
-      return get_typename<R>(L) +
-             " (" + get_typename<T1>(L) +
-             ", " + get_typename<T2>(L) +
-             ", " + get_typename<T3>(L) +
-             ", " + get_typename<T4>(L) +
-             ", " + get_typename<T5>(L) +
-             ", " + get_typename<T6>(L) +
-             ", " + get_typename<T7>(L) + ")";
-    }
-    static int lfunc(lua_State *L)
-    {
-      try {
-        typename typehold<T1>::natural a1 =
-          object_cast<typename typehold<T1>::natural>(from_stack(L, 1));
-        typename typehold<T2>::natural a2 =
-          object_cast<typename typehold<T2>::natural>(from_stack(L, 2));
-        typename typehold<T3>::natural a3 =
-          object_cast<typename typehold<T3>::natural>(from_stack(L, 3));
-        typename typehold<T4>::natural a4 =
-          object_cast<typename typehold<T4>::natural>(from_stack(L, 4));
-        typename typehold<T5>::natural a5 =
-          object_cast<typename typehold<T5>::natural>(from_stack(L, 5));
-        typename typehold<T6>::natural a6 =
-          object_cast<typename typehold<T6>::natural>(from_stack(L, 6));
-        typename typehold<T7>::natural a7 =
-          object_cast<typename typehold<T7>::natural>(from_stack(L, 6));
-        return caller<ftype, f>::call(L,a1,a2,a3,a4,a5,a6,a7);
-      }
-      catch (...) {
-        lua_error_signature(L, sign(L));
-      }
-      return 0;
-    }
-  };
-  template <typename R, typename T1, typename T2, typename T3, typename T4,
-            typename T5, typename T6, typename T7,
-            R (*f)(T1, T2, T3, T4, T5, T6, T7)>
-    struct cfunc_hold<R (*)(T1, T2, T3, T4, T5, T6, T7), f>
-  {
-    typedef cfunc_hold<R (*)(T1,T2,T3,T4,T5,T6,T7),f> thisclass;
-    static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
-    {
-      return f(a1, a2, a3, a4, a5, a6, a7);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(lua_State*,T1,T2,T3,T4,T5,T6,T7), thisclass::wrap>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, typename T5, typename T6, typename T7,
-            R (C::*m)(T1, T2, T3, T4, T5, T6, T7)>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4, T5, T6, T7), m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4,T5,T6,T7),m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
-    {
-      return (c->*m)(a1,a2,a3,a4,a5,a6,a7);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4,T5,T6,T7), thisclass::flatten>::lfunc(L);
-    }
-  };
-  template <typename R, typename C, typename T1, typename T2, typename T3,
-            typename T4, typename T5, typename T6, typename T7,
-            R (C::*m)(T1, T2, T3, T4, T5, T6, T7) const>
-    struct cfunc_hold<R (C::*)(T1, T2, T3, T4, T5, T6, T7) const, m>
-  {
-    typedef cfunc_hold<R (C::*)(T1,T2,T3,T4,T5,T6,T7) const,m> thisclass;
-    static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
-    {
-      return (c->*m)(a1,a2,a3,a4,a5,a6,a7);
-    }
-    static int lfunc(lua_State *L)
-    {
-      return cfunc_hold<R (*)(C*,T1,T2,T3,T4,T5,T6,T7), thisclass::flatten>::lfunc(L);
-    }
-  };
-
-}
-
-// casttype class implementatioin
-namespace luaport
-{
-  template <typename T>
-    struct casttype
-  {
-    static T cast(const object &obj)
-    {
-printf("INSTANCE CAST\n");
-      reference<T> r = obj;
-      return *r;
-    }
-  };
-  template <>
-    struct casttype<bool>
-  {
-    static bool cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      obj.push();
-      bool b = lua_toboolean(L, -1);
-      lua_pop(L, 1);
-      return b;
-    }
-  };
-  template <>
-    struct casttype<double>
-  {
-    static double cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      obj.push();
-      double d = lua_tonumber(L, -1);
-      lua_pop(L, 1);
-      return d;
-    }
-  };
-  template <>
-    struct casttype<int>
-  {
-    static int cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      obj.push();
-      int i = lua_tointeger(L, -1);
-      lua_pop(L, 1);
-      return i;
-    }
-  };
-  template <>
-    struct casttype<long>
-  {
-    static long cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      obj.push();
-      long l = lua_tointeger(L, -1);
-      lua_pop(L, 1);
-      return l;
-    }
-  };
-  template <>
-    struct casttype<unsigned char>
-  {
-    static unsigned char cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      obj.push();
-      unsigned char u = lua_tointeger(L, -1);
-      lua_pop(L, 1);
-      return u;
-    }
-  };
-  template <>
-    struct casttype<lua_CFunction>
-  {
-    static lua_CFunction cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      obj.push();
-      lua_CFunction f = lua_tocfunction(L, -1);
-      lua_pop(L, 1);
-      return f;
-    }
-  };
-  template <>
-    struct casttype<std::string>
-  {
-    static std::string cast(const object &obj)
-    {
-      size_t len;
-      lua_State *L = obj.interpreter();
-      obj.push();
-      const char *c_str = luaL_tolstring(L, -1, &len);
-      std::string str;
-      if (c_str)
+    // call_traits 0
+    template <typename R, R (*f)(lua_State*)>
+      struct call_traits<R (*)(lua_State*), f>
+    {
+      static int call(lua_State *L)
       {
-        str.assign(c_str, 0, len);
+        luaport::push(L, (*f)(L)) ;
+        return 1;
       }
-      lua_pop(L, 2);
-      return str;
-    }
-  };
-  template <>
-    struct casttype<luaport::object>
-  {
-    static luaport::object cast(const object &obj)
+    };
+    template <void (*f)(lua_State*)>
+      struct call_traits<void (*)(lua_State*), f>
     {
-      return obj;
-    }
-  };
-  template <typename T>
-    struct casttype<luaport::reference<T> >
-  {
-    static luaport::reference<T> cast(const object &obj)
-    {
-printf("CAST TO REFERENCE\n");
-      return obj;
-    }
-  };
-  template <typename T>
-    struct casttype<T *>
-  {
-    static T* cast(const object &obj)
-    {
-      lua_State *L = obj.interpreter();
-      object m = obj.getmetatable();
-      if (! m.is_table()) { throw std::bad_cast(); }
-      if (! m["luaport"].is_valid()) { throw std::bad_cast(); }
-
-      object c = m["class"];
-      obj.push();
-      managed<void> *u = (managed<void> *)lua_touserdata(L, -1);
-      void *p = u->p;
-      lua_pop(L, 1);
-      for (;;)
+      static int call(lua_State *L)
       {
-printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
-        if (c == get_class<T>(L)) { break; }
-        m = c.getmetatable();
-        if (m.type() != LUA_TTABLE) { throw std::bad_cast(); }
-        c = m["__index"];
-        object(m["downcast"]).push();
-        void*(*cast)(void *) = (void* (*)(void*))lua_touserdata(L, -1);
+        (*f)(L);
+        return 0;
+      }
+    };
+    // call_traits 1
+    template <typename R, typename T1, R (*f)(lua_State*,T1)>
+      struct call_traits<R (*)(lua_State*,T1), f>
+    {
+      static int call(lua_State *L, T1 a1)
+      {
+        luaport::push(L, (*f)(L, a1) );
+        return 1;
+      }
+    };
+    template <typename T1, void (*f)(lua_State*,T1)>
+      struct call_traits<void (*)(lua_State*,T1), f>
+    {
+      static int call(lua_State *L, T1 a1)
+      {
+        (*f)(L, a1);
+        return 0;
+      }
+    };
+    // call_traits 2
+    template <typename R, typename T1,
+              typename T2, R (*f)(lua_State*, T1, T2)>
+      struct call_traits<R (*)(lua_State*, T1, T2), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2)
+      {
+        luaport::push(L, (*f)(L, a1, a2) );
+        return 1;
+      }
+    };
+    template <typename T1, typename T2,
+              void (*f)(lua_State*, T1, T2)>
+      struct call_traits<void (*)(lua_State*, T1, T2), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2)
+      {
+        (*f)(L, a1, a2);
+        return 0;
+      }
+    };
+    // call_traits 3
+    template <typename R, typename T1, typename T2, typename T3,
+              R (*f)(lua_State*, T1, T2, T3)>
+      struct call_traits<R (*)(lua_State*, T1, T2, T3), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3)
+      {
+        luaport::push(L, (*f)(L, a1, a2, a3) );
+        return 1;
+      }
+    };
+    template <typename T1, typename T2, typename T3,
+              void (*f)(lua_State*, T1, T2, T3)>
+      struct call_traits<void (*)(lua_State*, T1, T2, T3), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3)
+      {
+        (*f)(L, a1, a2, a3);
+        return 0;
+      }
+    };
+    // call_traits 4
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              R (*f)(lua_State*, T1, T2, T3, T4)>
+      struct call_traits<R (*)(lua_State*, T1, T2, T3, T4), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4)
+      {
+        luaport::push(L, (*f)(L, a1, a2, a3, a4) );
+        return 1;
+      }
+    };
+    template <typename T1, typename T2, typename T3, typename T4,
+              void (*f)(lua_State*, T1, T2, T3, T4)>
+      struct call_traits<void (*)(lua_State*, T1, T2, T3, T4), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4)
+      {
+        (*f)(L, a1, a2, a3, a4);
+        return 0;
+      }
+    };
+    // call_traits 5
+    template <typename R, typename T1, typename T2, typename T3,
+              typename T4, typename T5,
+              R (*f)(lua_State*, T1, T2, T3, T4, T5)>
+      struct call_traits<R (*)(lua_State*, T1, T2, T3, T4, T5), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
+      {
+        luaport::push(L, (*f)(L, a1, a2, a3, a4, a5) );
+        return 1;
+      }
+    };
+    template <typename T1, typename T2, typename T3, typename T4,
+              typename T5, void (*f)(lua_State*, T1, T2, T3, T4, T5)>
+      struct call_traits<void (*)(lua_State*, T1, T2, T3, T4, T5), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
+      {
+        (*f)(L, a1, a2, a3, a4, a5);
+        return 0;
+      }
+    };
+    // call_traits 6
+    template <typename R, typename T1, typename T2, typename T3,
+              typename T4, typename T5, typename T6,
+              R (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
+      struct call_traits<R (*)(lua_State*, T1, T2, T3, T4, T5, T6), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
+      {
+        luaport::push(L, (*f)(L, a1, a2, a3, a4, a5, a6) );
+        return 1;
+      }
+    };
+    template <typename T1, typename T2, typename T3, typename T4,
+              typename T5, typename T6,
+              void (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
+      struct call_traits<void (*)(lua_State*, T1, T2, T3, T4, T5, T6), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
+      {
+        (*f)(L, a1, a2, a3, a4, a5, a6);
+        return 0;
+      }
+    };
+    // call_traits 7
+    template <typename R, typename T1, typename T2, typename T3,
+              typename T4, typename T5, typename T6, typename T7,
+              R (*f)(lua_State*, T1, T2, T3, T4, T5, T6, T7)>
+      struct call_traits<R (*)(lua_State*, T1, T2, T3, T4, T5, T6, T7), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
+      {
+        luaport::push(L, (*f)(L, a1, a2, a3, a4, a5, a6, a7) );
+        return 1;
+      }
+    };
+    template <typename T1, typename T2, typename T3, typename T4,
+              typename T5, typename T6, typename T7,
+              void (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
+      struct call_traits<void (*)(lua_State*, T1, T2, T3, T4, T5, T6, T7), f>
+    {
+      static int call(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
+      {
+        (*f)(L, a1, a2, a3, a4, a5, a6, a7);
+        return 0;
+      }
+    };
+
+    /// @endcond DETAIL
+  } // namespace detail
+
+  // cfunc_traits struct implementation
+  namespace detail
+  {
+    /// @cond DETAIL
+
+    // cfunc_traits 0
+    template <typename R, R (*f)(lua_State*)>
+      struct cfunc_traits<R (*)(lua_State*), f>
+    {
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) + " ()";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          return call_traits<R (*)(lua_State*), f>::call(L);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L) );
+        }
+        return 0;
+      }
+    };
+    template <typename R, R (*f)()>
+      struct cfunc_traits<R (*)(), f>
+    {
+      typedef cfunc_traits<R (*)(),f> thisclass;
+      static R wrap(lua_State *L)
+      {
+        return f();
+      }
+      static int lfunc(lua_State *L)
+      {
+        cfunc_traits<R (*)(lua_State*), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, R (C::*m)()>
+      struct cfunc_traits<R (C::*)(), m>
+    {
+      typedef cfunc_traits<R (C::*)(),m> thisclass;
+      static R flatten(C *c)
+      {
+        return (c->*m)();
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, R (C::*m)() const>
+      struct cfunc_traits<R (C::*)() const, m>
+    {
+      typedef cfunc_traits<R (C::*)() const,m> thisclass;
+      static R flatten(C *c)
+      {
+        return (c->*m)();
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 1
+    template <typename R, typename T1, R (*f)(lua_State*,T1)>
+      struct cfunc_traits<R (*)(lua_State*,T1), f>
+    {
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) +
+               " (" + get_typename<T1>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural arg1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          return call_traits<R (*)(lua_State*,T1), f>::call(L, arg1);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L) );
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, R (*f)(T1)>
+      struct cfunc_traits<R (*)(T1), f>
+    {
+      typedef cfunc_traits<R (*)(T1),f> thisclass;
+      static R wrap(lua_State *L, T1 a1)
+      {
+        return f(a1);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, R (C::*m)(T1)>
+      struct cfunc_traits<R (C::*)(T1), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1), m> thisclass;
+      static R flatten(C *c, T1 a1)
+      {
+        return (c->*m)(a1);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, R (C::*m)(T1) const>
+      struct cfunc_traits<R (C::*)(T1) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1) const, m> thisclass;
+      static R flatten(C *c, T1 a1)
+      {
+        return (c->*m)(a1);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 2
+    template <typename R, typename T1, typename T2,
+              R (*f)(lua_State*, T1, T2)>
+      struct cfunc_traits<R (*)(lua_State*, T1, T2), f>
+    {
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) +
+               " (" + get_typename<T1>(L) +
+               ", " + get_typename<T2>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural arg1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          typename type_traits<T2>::natural arg2 =
+            object_cast<typename type_traits<T2>::natural>(from_stack(L, 2));
+          return call_traits<R (*)(lua_State*,T1, T2), f>::call(L, arg1, arg2);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L) );
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, typename T2, R (*f)(T1, T2)>
+      struct cfunc_traits<R (*)(T1, T2), f>
+    {
+      typedef cfunc_traits<R (*)(T1,T2),f> thisclass;
+      static R wrap(lua_State *L, T1 a1, T2 a2)
+      {
+        return f(a1, a2);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1,T2), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2,
+              R (C::*m)(T1, T2)>
+      struct cfunc_traits<R (C::*)(T1, T2), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2),m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2)
+      {
+        return (c->*m)(a1, a2);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2,
+              R (C::*m)(T1, T2) const>
+      struct cfunc_traits<R (C::*)(T1, T2) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2) const,m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2)
+      {
+        return (c->*m)(a1, a2);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 3
+    template <typename R, typename T1, typename T2, typename T3,
+              R (*f)(lua_State*, T1, T2, T3)>
+      struct cfunc_traits<R (*)(lua_State*, T1, T2, T3), f>
+    {
+      typedef R (*ftype)(lua_State*,T1,T2,T3);
+      static std::string sign(lua_State *L)
+      {
+       return get_typename<R>(L) +
+              " (" + get_typename<T1>(L) +
+              ", " + get_typename<T2>(L) +
+              ", " + get_typename<T3>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural arg1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          typename type_traits<T2>::natural arg2 =
+            object_cast<typename type_traits<T2>::natural>(from_stack(L, 2));
+          typename type_traits<T3>::natural arg3 =
+            object_cast<typename type_traits<T3>::natural>(from_stack(L, 3));
+          return call_traits<ftype, f>::call(L, arg1, arg2, arg3);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L) );
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, typename T2, typename T3, R (*f)(T1, T2, T3)>
+      struct cfunc_traits<R (*)(T1, T2, T3), f>
+    {
+      typedef cfunc_traits<R (*)(T1,T2,T3),f> thisclass;
+      static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3)
+      {
+        return f(a1, a2, a3);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1,T2,T3), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              R (C::*m)(T1, T2, T3)>
+      struct cfunc_traits<R (C::*)(T1, T2, T3), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3),m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3)
+      {
+        return (c->*m)(a1, a2, a3);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              R (C::*m)(T1, T2, T3) const>
+      struct cfunc_traits<R (C::*)(T1, T2, T3) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3) const,m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3)
+      {
+        return (c->*m)(a1, a2, a3);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 4
+    template <typename R, typename T1, typename T2, typename T3,
+              typename T4, R (*f)(lua_State*, T1, T2, T3, T4)>
+      struct cfunc_traits<R (*)(lua_State*, T1, T2, T3, T4), f>
+    {
+      typedef R (*ftype)(lua_State*,T1,T2,T3,T4);
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) +
+               " (" + get_typename<T1>(L) +
+               ", " + get_typename<T2>(L) +
+               ", " + get_typename<T3>(L) +
+               ", " + get_typename<T4>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural arg1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          typename type_traits<T2>::natural arg2 =
+            object_cast<typename type_traits<T2>::natural>(from_stack(L, 2));
+          typename type_traits<T3>::natural arg3 =
+            object_cast<typename type_traits<T3>::natural>(from_stack(L, 3));
+          typename type_traits<T4>::natural arg4 =
+            object_cast<typename type_traits<T4>::natural>(from_stack(L, 4));
+          return call_traits<ftype, f>::call(L, arg1, arg2, arg3, arg4);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L));
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, typename T2, typename T3,
+              typename T4, R (*f)(T1, T2, T3, T4)>
+      struct cfunc_traits<R (*)(T1, T2, T3, T4), f>
+    {
+      typedef cfunc_traits<R (*)(T1,T2,T3,T4),f> thisclass;
+      static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4)
+      {
+        return f(a1, a2, a3, a4);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1,T2,T3,T4), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, R (C::*m)(T1, T2, T3, T4)>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4),m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4)
+      {
+        return (c->*m)(a1, a2, a3, a4);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, R (C::*m)(T1, T2, T3, T4) const>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4) const,m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4)
+      {
+        return (c->*m)(a1, a2, a3, a4);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 5
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              typename T5, R (*f)(lua_State*, T1, T2, T3, T4, T5)>
+      struct cfunc_traits<R (*)(lua_State*, T1, T2, T3, T4, T5), f>
+    {
+      typedef R (*ftype)(lua_State*,T1,T2,T3,T4,T5);
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) +
+               " (" + get_typename<T1>(L) +
+               ", " + get_typename<T2>(L) +
+               ", " + get_typename<T3>(L) +
+               ", " + get_typename<T4>(L) +
+               ", " + get_typename<T5>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural arg1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          typename type_traits<T2>::natural arg2 =
+            object_cast<typename type_traits<T2>::natural>(from_stack(L, 2));
+          typename type_traits<T3>::natural arg3 =
+            object_cast<typename type_traits<T3>::natural>(from_stack(L, 3));
+          typename type_traits<T4>::natural arg4 =
+            object_cast<typename type_traits<T4>::natural>(from_stack(L, 4));
+          typename type_traits<T5>::natural arg5 =
+            object_cast<typename type_traits<T5>::natural>(from_stack(L, 5));
+          return call_traits<ftype, f>::call(L, arg1, arg2, arg3, arg4, arg5);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L));
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              typename T5, R (*f)(T1, T2, T3, T4, T5)>
+      struct cfunc_traits<R (*)(T1, T2, T3, T4, T5), f>
+    {
+      typedef cfunc_traits<R (*)(T1,T2,T3,T4,T5),f> thisclass;
+      static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
+      {
+        return f(a1, a2, a3, a4, a5);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1,T2,T3,T4,T5), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, typename T5, R (C::*m)(T1, T2, T3, T4, T5)>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4, T5), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4,T5),m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
+      {
+        return (c->*m)(a1, a2, a3, a4, a5);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4,T5), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, typename T5, R (C::*m)(T1, T2, T3, T4, T5) const>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4, T5) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4,T5) const,m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5)
+      {
+        return (c->*m)(a1, a2, a3, a4, a5);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4,T5), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 6
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              typename T5, typename T6,
+              R (*f)(lua_State*, T1, T2, T3, T4, T5, T6)>
+      struct cfunc_traits<R (*)(lua_State*, T1, T2, T3, T4, T5, T6), f>
+    {
+      typedef R (*ftype)(lua_State*,T1,T2,T3,T4,T5,T6);
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) +
+               " (" + get_typename<T1>(L) +
+               ", " + get_typename<T2>(L) +
+               ", " + get_typename<T3>(L) +
+               ", " + get_typename<T4>(L) +
+               ", " + get_typename<T5>(L) +
+               ", " + get_typename<T6>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural a1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          typename type_traits<T2>::natural a2 =
+            object_cast<typename type_traits<T2>::natural>(from_stack(L, 2));
+          typename type_traits<T3>::natural a3 =
+            object_cast<typename type_traits<T3>::natural>(from_stack(L, 3));
+          typename type_traits<T4>::natural a4 =
+            object_cast<typename type_traits<T4>::natural>(from_stack(L, 4));
+          typename type_traits<T5>::natural a5 =
+            object_cast<typename type_traits<T5>::natural>(from_stack(L, 5));
+          typename type_traits<T6>::natural a6 =
+            object_cast<typename type_traits<T6>::natural>(from_stack(L, 6));
+          return call_traits<ftype, f>::call(L,a1,a2,a3,a4,a5,a6);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L));
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              typename T5, typename T6, R (*f)(T1, T2, T3, T4, T5, T6)>
+      struct cfunc_traits<R (*)(T1, T2, T3, T4, T5, T6), f>
+    {
+      typedef cfunc_traits<R (*)(T1,T2,T3,T4,T5,T6),f> thisclass;
+      static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
+      {
+        return f(a1, a2, a3, a4, a5, a6);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1,T2,T3,T4,T5,T6), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, typename T5, typename T6,
+              R (C::*m)(T1, T2, T3, T4, T5, T6)>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4, T5, T6), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4,T5,T6),m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
+      {
+        return (c->*m)(a1,a2,a3,a4,a5,a6);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4,T5,T6), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, typename T5, typename T6,
+              R (C::*m)(T1, T2, T3, T4, T5, T6) const>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4, T5, T6) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4,T5,T6) const,m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6)
+      {
+        return (c->*m)(a1,a2,a3,a4,a5,a6);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4,T5,T6), thisclass::flatten>::lfunc(L);
+      }
+    };
+    // cfunc_traits 7
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              typename T5, typename T6, typename T7,
+              R (*f)(lua_State*, T1, T2, T3, T4, T5, T6, T7)>
+      struct cfunc_traits<R (*)(lua_State*, T1, T2, T3, T4, T5, T6, T7), f>
+    {
+      typedef R (*ftype)(lua_State*,T1,T2,T3,T4,T5,T6,T7);
+      static std::string sign(lua_State *L)
+      {
+        return get_typename<R>(L) +
+               " (" + get_typename<T1>(L) +
+               ", " + get_typename<T2>(L) +
+               ", " + get_typename<T3>(L) +
+               ", " + get_typename<T4>(L) +
+               ", " + get_typename<T5>(L) +
+               ", " + get_typename<T6>(L) +
+               ", " + get_typename<T7>(L) + ")";
+      }
+      static int lfunc(lua_State *L)
+      {
+        try {
+          typename type_traits<T1>::natural a1 =
+            object_cast<typename type_traits<T1>::natural>(from_stack(L, 1));
+          typename type_traits<T2>::natural a2 =
+            object_cast<typename type_traits<T2>::natural>(from_stack(L, 2));
+          typename type_traits<T3>::natural a3 =
+            object_cast<typename type_traits<T3>::natural>(from_stack(L, 3));
+          typename type_traits<T4>::natural a4 =
+            object_cast<typename type_traits<T4>::natural>(from_stack(L, 4));
+          typename type_traits<T5>::natural a5 =
+            object_cast<typename type_traits<T5>::natural>(from_stack(L, 5));
+          typename type_traits<T6>::natural a6 =
+            object_cast<typename type_traits<T6>::natural>(from_stack(L, 6));
+          typename type_traits<T7>::natural a7 =
+            object_cast<typename type_traits<T7>::natural>(from_stack(L, 6));
+          return call_traits<ftype, f>::call(L,a1,a2,a3,a4,a5,a6,a7);
+        }
+        catch (...) {
+          lua_error_signature(L, sign(L));
+        }
+        return 0;
+      }
+    };
+    template <typename R, typename T1, typename T2, typename T3, typename T4,
+              typename T5, typename T6, typename T7,
+              R (*f)(T1, T2, T3, T4, T5, T6, T7)>
+      struct cfunc_traits<R (*)(T1, T2, T3, T4, T5, T6, T7), f>
+    {
+      typedef cfunc_traits<R (*)(T1,T2,T3,T4,T5,T6,T7),f> thisclass;
+      static R wrap(lua_State *L, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
+      {
+        return f(a1, a2, a3, a4, a5, a6, a7);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(lua_State*,T1,T2,T3,T4,T5,T6,T7), thisclass::wrap>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, typename T5, typename T6, typename T7,
+              R (C::*m)(T1, T2, T3, T4, T5, T6, T7)>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4, T5, T6, T7), m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4,T5,T6,T7),m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
+      {
+        return (c->*m)(a1,a2,a3,a4,a5,a6,a7);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4,T5,T6,T7), thisclass::flatten>::lfunc(L);
+      }
+    };
+    template <typename R, typename C, typename T1, typename T2, typename T3,
+              typename T4, typename T5, typename T6, typename T7,
+              R (C::*m)(T1, T2, T3, T4, T5, T6, T7) const>
+      struct cfunc_traits<R (C::*)(T1, T2, T3, T4, T5, T6, T7) const, m>
+    {
+      typedef cfunc_traits<R (C::*)(T1,T2,T3,T4,T5,T6,T7) const,m> thisclass;
+      static R flatten(C *c, T1 a1, T2 a2, T3 a3, T4 a4, T5 a5, T6 a6, T7 a7)
+      {
+        return (c->*m)(a1,a2,a3,a4,a5,a6,a7);
+      }
+      static int lfunc(lua_State *L)
+      {
+        return cfunc_traits<R (*)(C*,T1,T2,T3,T4,T5,T6,T7), thisclass::flatten>::lfunc(L);
+      }
+    };
+
+    /// @endcond DETAIL
+  } // namespace detail
+
+  // cast_traits struct implementatioin
+  namespace detail
+  {
+    /// @cond DETAIL
+
+    template <typename T>
+      struct cast_traits
+    {
+      static T cast(const object &obj)
+      {
+  printf("INSTANCE CAST\n");
+        reference<T> r = obj;
+        return *r;
+      }
+    };
+    template <>
+      struct cast_traits<bool>
+    {
+      static bool cast(const object &obj)
+      {
+        lua_State *L = obj.interpreter();
+        obj.push();
+        bool b = lua_toboolean(L, -1);
         lua_pop(L, 1);
-        if (cast)
-        {
-          p = cast(p);
-        }
-        else
-        {
-        }
+        return b;
       }
-      return (T *)p;
-    }
-  };
-
-}
-
-// finalizer class implementation
-namespace luaport
-{
-  template <typename T>
-    inline int finalizer<T>::lfunc(lua_State *L)
-  {
-    object u = from_stack(L, 1);
-    object f = u["__finalize"];
-    if (f.type() == LUA_TFUNCTION)
+    };
+    template <>
+      struct cast_traits<double>
     {
-      f(u);
-    }
-    // lua will release the memory
-    return 0;
-  }
-
-
-  template <typename T>
-    inline int finalizer<T *>::lfunc(lua_State *L)
-  {
-    managed<T> *u = (managed<T>*)lua_touserdata(L, 1);
-    object inst = from_stack(L, 1);
-    object f = inst["__finalize"];
-    if (f.type() == LUA_TFUNCTION)
-    {
-      f(inst);
-    }
-    // call only the dtor (not delete)
-    u->~managed();
-    // lua will release the memory
-    return 0;
-  }
-
-}
-
-// managed class implementation
-namespace luaport
-{
-
-  template <typename T>
-    managed<T>::~managed()
-  {
-    printf("RELEASE UDATA!\n");
-    if (adopt)
-    {
-      object ref = registry(L)["luaport"]["references"];
-      object count = ref[lightuserdata(L, p)];
-      if (! count)
+      static double cast(const object &obj)
       {
-        printf("ERROR!\n");
+        lua_State *L = obj.interpreter();
+        obj.push();
+        double d = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        return d;
       }
-      int c = object_cast<int>(count);
-      printf("COUNT DOWN (BEFORE): %d\n", c);
-      c--;
-      printf("COUNT DOWN (ATER): %d\n", c);
-      ref[lightuserdata(L, p)] = c;
-      if (c == 0)
+    };
+    template <>
+      struct cast_traits<int>
+    {
+      static int cast(const object &obj)
       {
-        ref[lightuserdata(L, p)] = object();
-        printf("RELEASE THE INSTANCE\n");
-        delete p;
+        lua_State *L = obj.interpreter();
+        obj.push();
+        int i = lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        return i;
+      }
+    };
+    template <>
+      struct cast_traits<long>
+    {
+      static long cast(const object &obj)
+      {
+        lua_State *L = obj.interpreter();
+        obj.push();
+        long l = lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        return l;
+      }
+    };
+    template <>
+      struct cast_traits<unsigned char>
+    {
+      static unsigned char cast(const object &obj)
+      {
+        lua_State *L = obj.interpreter();
+        obj.push();
+        unsigned char u = lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        return u;
+      }
+    };
+    template <>
+      struct cast_traits<lua_CFunction>
+    {
+      static lua_CFunction cast(const object &obj)
+      {
+        lua_State *L = obj.interpreter();
+        obj.push();
+        lua_CFunction f = lua_tocfunction(L, -1);
+        lua_pop(L, 1);
+        return f;
+      }
+    };
+    template <>
+      struct cast_traits<std::string>
+    {
+      static std::string cast(const object &obj)
+      {
+        size_t len;
+        lua_State *L = obj.interpreter();
+        obj.push();
+        const char *c_str = luaL_tolstring(L, -1, &len);
+        std::string str;
+        if (c_str)
+        {
+          str.assign(c_str, 0, len);
+        }
+        lua_pop(L, 2);
+        return str;
+      }
+    };
+    template <>
+      struct cast_traits<luaport::object>
+    {
+      static luaport::object cast(const object &obj)
+      {
+        return obj;
+      }
+    };
+    template <typename T>
+      struct cast_traits<luaport::reference<T> >
+    {
+      static luaport::reference<T> cast(const object &obj)
+      {
+  printf("CAST TO REFERENCE\n");
+        return obj;
+      }
+    };
+    template <typename T>
+      struct cast_traits<T *>
+    {
+      static T* cast(const object &obj)
+      {
+        lua_State *L = obj.interpreter();
+        object m = obj.getmetatable();
+        if (! m.is_table()) { throw std::bad_cast(); }
+        if (! m["luaport"].is_valid()) { throw std::bad_cast(); }
+
+        object c = m["class"];
+        obj.push();
+        managed<void> *u = (managed<void> *)lua_touserdata(L, -1);
+        void *p = u->p;
+        lua_pop(L, 1);
+        for (;;)
+        {
+  printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
+          if (c == get_class<T>(L)) { break; }
+          m = c.getmetatable();
+          if (m.type() != LUA_TTABLE) { throw std::bad_cast(); }
+          c = m["__index"];
+          object(m["downcast"]).push();
+          void*(*cast)(void *) = (void* (*)(void*))lua_touserdata(L, -1);
+          lua_pop(L, 1);
+          if (cast)
+          {
+            p = cast(p);
+          }
+          else
+          {
+          }
+        }
+        return (T *)p;
+      }
+    };
+
+    /// @endcond DETAIL
+  } // namespace detail
+
+  // finalizer class implementation
+  namespace detail
+  {
+    template <typename T>
+      inline int finalizer<T>::lfunc(lua_State *L)
+    {
+      object u = from_stack(L, 1);
+      object f = u["__finalize"];
+      if (f.type() == LUA_TFUNCTION)
+      {
+        f(u);
+      }
+      // lua will release the memory
+      return 0;
+    }
+
+
+    template <typename T>
+      inline int finalizer<T *>::lfunc(lua_State *L)
+    {
+      managed<T> *u = (managed<T>*)lua_touserdata(L, 1);
+      object inst = from_stack(L, 1);
+      object f = inst["__finalize"];
+      if (f.type() == LUA_TFUNCTION)
+      {
+        f(inst);
+      }
+      // call only the dtor (not delete)
+      u->~managed();
+      // lua will release the memory
+      return 0;
+    }
+
+  } // namespace detail
+
+  // managed class implementation
+  namespace detail
+  {
+
+    template <typename T>
+      managed<T>::~managed()
+    {
+      printf("RELEASE UDATA!\n");
+      if (adopt)
+      {
+        object ref = registry(L)["luaport"]["references"];
+        object count = ref[lightuserdata(L, p)];
+        if (! count)
+        {
+          printf("ERROR!\n");
+        }
+        int c = object_cast<int>(count);
+        printf("COUNT DOWN (BEFORE): %d\n", c);
+        c--;
+        printf("COUNT DOWN (ATER): %d\n", c);
+        ref[lightuserdata(L, p)] = c;
+        if (c == 0)
+        {
+          ref[lightuserdata(L, p)] = object();
+          printf("RELEASE THE INSTANCE\n");
+          delete p;
+        }
       }
     }
-  }
 
 
-  // placement new
-  template <typename T>
-    void* managed<T>::operator new(std::size_t, lua_State *L)
-  {
-    return lua_newuserdata(L, sizeof(managed<T>));
+    // placement new
+    template <typename T>
+      void* managed<T>::operator new(std::size_t, lua_State *L)
+    {
+      return lua_newuserdata(L, sizeof(managed<T>));
+    }
+
+    template <typename T>
+      inline std::string type_traits<T>::name(lua_State *L)
+    {
+      object fmap = registry(L)["luaport"]["func_to_name"];
+      object str = fmap[finalizer<T>::lfunc];
+      if (str) { return str.tostring(); }
+      str = fmap[finalizer<managed<T>*>::lfunc];
+      if (str) { return str.tostring(); }
+      return "[unknown]";
+    }
+    template <typename T>
+      inline std::string type_traits<T &>::name(lua_State *L)
+    {
+      return type_traits<T>::name(L) + "&";
+    }
+    template <typename T>
+      inline std::string type_traits<const T &>::name(lua_State *L)
+    {
+      return "const " + type_traits<T>::name(L) + "&";
+    }
+
   }
 
-  template <typename T>
-    inline std::string typehold<T>::name(lua_State *L)
-  {
-    object fmap = registry(L)["luaport"]["func_to_name"];
-    object str = fmap[finalizer<T>::lfunc];
-    if (str) { return str.tostring(); }
-    str = fmap[finalizer<managed<T>*>::lfunc];
-    if (str) { return str.tostring(); }
-    return "[unknown]";
-  }
-  template <typename T>
-    inline std::string typehold<T &>::name(lua_State *L)
-  {
-    return typehold<T>::name(L) + "&";
-  }
-  template <typename T>
-    inline std::string typehold<const T &>::name(lua_State *L)
-  {
-    return "const " + typehold<T>::name(L) + "&";
-  }
-
-}
+} // namespace luaport
 
 // function implementation
 namespace luaport
 {
+  using namespace detail;
 
   // ------------------------------------------------------
   // function implementation
@@ -2162,7 +2219,7 @@ namespace luaport
   template <typename T>
     inline std::string get_typename(lua_State *L)
   {
-    return typehold<T>::name(L);
+    return type_traits<T>::name(L);
   }
 
 
@@ -2287,7 +2344,7 @@ printf("D RETURN\n");
   template <typename T>
     inline T object_cast(const object &obj)
   {
-    return casttype<T>::cast(obj);
+    return cast_traits<T>::cast(obj);
   }
 
 
@@ -2326,20 +2383,11 @@ printf("D RETURN\n");
     return r;
   }
 
-
-
-
-  // ----------------------------------------------------------------
-  // class implementation
-
-  template <typename T> template <typename From>
-    reference<T>::reference(const class weak_ref<From> &src)
-    : object(), p(NULL)
-  {
-    reset(src.lock());
-  }
-
 }
+
+
+// ----------------------------------------------------------------
+// class implementation
 
 // iterator class implementation
 namespace luaport
@@ -2405,7 +2453,7 @@ namespace luaport
 namespace luaport
 {
 
-  // Ctor (from proxy)
+  /// Ctor (from proxy)
   inline object::object(const proxy &p)
     : L(p.L), ref(LUA_REFNIL)
   {
@@ -2423,7 +2471,7 @@ namespace luaport
   }
 
 
-  // Ctor (object of any value)
+  /// Ctor (object of any value)
   template <typename T>
     inline object::object(lua_State *L, const T &val)
     : L(L), ref(LUA_REFNIL)
@@ -2438,7 +2486,7 @@ namespace luaport
   }
 
 
-  // Ctor (object of registred class)
+  /// Ctor (object of registred class)
   template <typename T>
     inline object::object(lua_State *L, T *val, bool adopt)
     : L(L), ref(LUA_REFNIL)
@@ -2611,6 +2659,19 @@ namespace luaport
 
     object t(*this);
     return proxy(L, t.ref, key);
+  }
+
+}
+
+// reference class implementation
+namespace luaport
+{
+
+  template <typename T> template <typename From>
+    reference<T>::reference(const class weak_ref<From> &src)
+    : object(), p(NULL)
+  {
+    reset(src.lock());
   }
 
 }
