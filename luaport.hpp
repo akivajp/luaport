@@ -5,10 +5,10 @@
 // Name:        luaport.hpp
 // Purpose:     C++ <-> lua porting (binding) library
 // Author:      Akiva Miura <akiva.miura@gmail.com>
-// Modified by:
+// Modified by: spinor (@tplantd)
 // Created:     03/18/2013
-// Modified:    20/06/2013
-// Copyright:   (C) 2013 Akiva Miura
+// Modified:    21/06/2013
+// Copyright:   (C) 2013 Akiva Miura, spinor
 // Licence:     MIT License
 /////////////////////////////////////////////////////////////////////////////
 
@@ -63,13 +63,24 @@ namespace luaport
   // class definitions
 
   /// luaport exception class
+  /**
+   * thrown when exception occurs in using this library.
+   */
   class exception : public std::exception
   {
     public:
+      /// Constructor
+      /**
+       * @param msg : content of the exception
+       */
       exception(const std::string &msg)
         : std::exception(), msg(msg)
       { }
 
+      /// get the exception content
+      /**
+       * @return the exception content
+       */
       virtual const char *what() const throw() { return msg.c_str(); }
 
       virtual ~exception() throw() { }
@@ -79,16 +90,26 @@ namespace luaport
   };
 
 
+  /// Lua stack index specifier
+  /**
+   * used when you want to initialize the lua object with a value from
+   * the lua stack.
+   */
   class from_stack
   {
     public:
-      from_stack(lua_State *L, int pos)
-        : L(L), pos(pos)
+      /// Cunstructor
+      /**
+       * @param L : lua interpreter
+       * @param idx : index on the lua stack
+       */
+      from_stack(lua_State *L, int idx)
+        : L(L), idx(idx)
       { }
 
     private:
       lua_State *L;
-      int pos;
+      int idx;
       friend class object;
   };
 
@@ -195,79 +216,104 @@ namespace luaport
   };
 
 
-  /// lua object class
+  /// Lua object class
   /**
-   * refers to lua object
+   * refers to lua object.
    */
   class object
   {
     public:
 
-      /// Ctor (nil object with interpreter)
+      /// Constructor (nil object with lua interpreter)
+      /**
+       * @param L : lua interpreter
+       */
       object(lua_State *L)
         : L(L), ref(LUA_REFNIL)
       {
       }
 
-      /// Cor (nil object)
+      /// Constructor (nil object)
       object()
         : L(NULL), ref(LUA_REFNIL)
       {
       }
 
-      /// Ctor (object copying)
+      /// Copy Constructor
+      /**
+       * @param src : lua object to copy
+       */
       object(const object &src)
+        : L(src.L), ref(LUA_REFNIL)
       {
-//printf("COPY!\n");
-        L = src.L;
-        ref = LUA_REFNIL;
         if (! L)
         {
+          // copying empty (nil) object
           return;
         }
 
         lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref);
         ref = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (OBJ FROM OBJ): %d\n", ref);
       }
 
-//      // move ctor (for C++0x)
-//      object(object&&)
-//      {
-//printf("MOVE!\n");
-//      }
 
-      /// Ctor (from stack)
+//      // Move Constructor
+//      object(object&&);
+
+
+      /// Constructor (from stack)
+      /**
+       * @param s : spcifies index on the lua stack
+       */
       object(const from_stack &s)
+        : L(s.L), ref(LUA_REFNIL)
       {
-//printf("FROM STACK\n");
-        L = s.L;
-        ref = LUA_REFNIL;
-        if (L)
-        {
-          lua_pushvalue(L, s.pos);
-          ref = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (FROM STACK): %d\n", ref);
-//printf("TYPE: %s\n", typestr());
-        }
+        assert(L != NULL);
+
+        lua_pushvalue(L, s.idx);
+        ref = luaL_ref(L, LUA_REGISTRYINDEX);
       }
 
-      /// Ctor (from proxy)
+
+      /// Constructor (from proxy)
+      /**
+       * @param p : specifies pair binding of table and key
+       */
       object(const class proxy &p);
 
-      /// Ctor (object of any value)
+
+      /// Constructor (elemental value object)
+      /**
+       * @param L : lua interpreter
+       * @param val : elemental value
+       */
       template <typename T>
         object(lua_State *L, const T &val);
 
-      /// Ctor (object of registred class)
-      template <typename T>
-        object(lua_State *L, T *val, bool adopt = false);
 
-      // Dtor
+      /// Constructor (string value object)
+      /**
+       * @param L : lua interpreter
+       * @param str: string value
+       */
+      object(lua_State *L, const char *str);
+
+
+      /// Constructor (object of registred class)
+      /**
+       * @param L : lua interpreter
+       * @param ptr: pointer to the class instance
+       * @param adopt : true if you adopt the object ownership to lua
+       */
+      template <typename T>
+        object(lua_State *L, T *ptr, bool adopt = false);
+
+
       ~object()
       {
         clear();
       }
+
 
       bool clear()
       {
@@ -282,8 +328,9 @@ namespace luaport
 
       const char *c_str() const
       {
+        this->push();
         std::string str = luaL_tolstring(L, -1, NULL);
-        lua_pop(L, 1);
+        lua_pop(L, 2);
         return str.c_str();
       }
 
@@ -324,15 +371,24 @@ namespace luaport
         return true;
       }
 
-      // member push
-      void push() const
-      {
-        lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-      }
+
+      /// Push the referred lua object onto the lua stack
+      /**
+       * @param L : lua interpreter
+       */
       void push(lua_State *L) const
       {
         lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
       }
+      /// Push the referred lua object onto the lua stack
+      /**
+       * (within the same lua interpreter of this object)
+       */
+      void push() const
+      {
+        lua_rawgeti(this->L, LUA_REGISTRYINDEX, ref);
+      }
+
 
       bool setmetatable(const object &t)
       {
@@ -343,25 +399,20 @@ namespace luaport
         return true;
       }
 
+
+      /// makes a table
+      /**
+       * (supposing this object is type of table)
+       * makes a table as a member object specified by the key.
+       * when a table already exists as a member, then returns it.
+       * @param key : index of this table object
+       * @param force : true - if non-table member already exists,
+       *                       overwrites the member with new table
+       * @return the table object as a member
+       */
+      /// retrieves the talble object
       template <typename T>
-        object table(const T &index)
-      {
-//printf("TABLE!\n");
-//printf("TYPE: %d\n", (*this)[index].obj().type());
-        object t = (*this)[index];
-//printf("TYPE of T: %d\n", t.type());
-        if (t.type() == LUA_TTABLE) { return t; }
-        if (t.type() == LUA_TNIL)
-        {
-          t = newtable(L);
-//printf("T TYPE: %d\n", t.type());
-          (*this)[index] = newtable(L);
-//printf("TYPE: %d\n", (*this)[index].type());
-          return (*this)[index];
-        }
-        fprintf(stderr, "error: '%s' is not table\n", (const char *)t);
-        return object();
-      }
+        object table(const T &key, bool force = false);
 
 
       std::string tostring() const
@@ -370,6 +421,10 @@ namespace luaport
       }
 
 
+      /// Type of refered lua object
+      /**
+       * @return object type (LUA_TXXX from lua.h)
+       */
       int type() const
       {
         if (ref == LUA_REFNIL) { return LUA_TNIL; }
@@ -378,6 +433,7 @@ namespace luaport
         lua_pop(L, 1);
         return t;
       }
+
 
       const char *typestr() const
       {
@@ -830,6 +886,12 @@ printf("COPYING FROM REFERENCE!\n");
     };
     template <typename T>
       struct type_traits<T &>
+    {
+      typedef T natural;
+      static std::string name(lua_State *L);
+    };
+    template <typename T>
+      struct type_traits<const T>
     {
       typedef T natural;
       static std::string name(lua_State *L);
@@ -2199,6 +2261,11 @@ namespace luaport
       return type_traits<T>::name(L) + "&";
     }
     template <typename T>
+      inline std::string type_traits<const T>::name(lua_State *L)
+    {
+      return "const " + type_traits<T>::name(L);
+    }
+    template <typename T>
       inline std::string type_traits<const T &>::name(lua_State *L)
     {
       return "const " + type_traits<T>::name(L) + "&";
@@ -2453,7 +2520,6 @@ namespace luaport
 namespace luaport
 {
 
-  /// Ctor (from proxy)
   inline object::object(const proxy &p)
     : L(p.L), ref(LUA_REFNIL)
   {
@@ -2471,29 +2537,34 @@ namespace luaport
   }
 
 
-  /// Ctor (object of any value)
   template <typename T>
     inline object::object(lua_State *L, const T &val)
     : L(L), ref(LUA_REFNIL)
   {
-    if (L)
-    {
-      luaport::push(L, val);
-      ref = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (OBJ FROM T): %d\n", ref);
-//printf("TYPE: %s\n", lua_typename(L, type()));
-    }
+    assert(L != NULL);
+
+    luaport::push(L, val);
+    ref = luaL_ref(L, LUA_REGISTRYINDEX);
   }
 
 
-  /// Ctor (object of registred class)
+  inline object::object(lua_State *L, const char *str)
+    : L(L)
+  {
+    assert(L != NULL);
+
+    lua_pushstring(L, str);
+    ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+
+
   template <typename T>
-    inline object::object(lua_State *L, T *val, bool adopt)
+    inline object::object(lua_State *L, T *ptr, bool adopt)
     : L(L), ref(LUA_REFNIL)
   {
     if (L)
     {
-      luaport::push(L, val, adopt);
+      luaport::push(L, ptr, adopt);
       ref = luaL_ref(L, LUA_REGISTRYINDEX);
     }
   }
@@ -2543,6 +2614,33 @@ printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
       c = m["__index"];
     }
     return false;
+  }
+
+
+  template <typename T>
+    inline object object::table(const T &key, bool force)
+  {
+    object m = (*this)[key];
+    if (m.type() == LUA_TTABLE) { return m; }
+    if (m.type() == LUA_TNIL)
+    {
+      m = newtable(L);
+      (*this)[key] = m;
+      return m;
+    }
+    // m is non-table member
+    if (! force)
+    {
+      std::string tname = this->tostring();
+      std::string kname = object(L, key).tostring();
+      std::string msg =
+        "error on object::table method : \"" + tname + "\"" +
+        " already has non-table member with key \"" + kname + "\"";
+      throw exception(msg);
+    }
+    m = newtable(L);
+    (*this)[key] = newtable(L);
+    return m;
   }
 
 
