@@ -2,14 +2,14 @@
 #define _LUAPORT_HPP
 
 /////////////////////////////////////////////////////////////////////////////
-// Name:        luaport.hpp
-// Purpose:     C++ <-> lua porting (binding) library
-// Author:      Akiva Miura <akiva.miura@gmail.com>
-// Modified by: spinor (@tplantd)
-// Created:     03/18/2013
-// Modified:    21/06/2013
-// Copyright:   (C) 2013 Akiva Miura, spinor
-// Licence:     MIT License
+/// @file        luaport.hpp
+/// @brief       C++ <-> lua porting (binding) library
+/// @date        03/18/2013 (created)
+/// @date        21/06/2013 (last modified)
+/// @author      Akiva Miura <akiva.miura@gmail.com>
+/// @author      spinor (\@tplantd)
+/// @par Copyright: (C) 2013 Akiva Miura, spinor
+/// @par Licence:   MIT License
 /////////////////////////////////////////////////////////////////////////////
 
 #include <lua.hpp>
@@ -17,19 +17,28 @@
 #include <typeinfo>
 #include <cassert>
 
+/// luaport main namespace
 namespace luaport
 {
 
   // constants
   const bool adopt = true;
 
-  // function prototypes
+  // ---------------------------------------------------------
+  // library function declarations
+  // ---------------------------------------------------------
   extern void open(lua_State *L);
 
   template <typename T>
     extern class object get_class(lua_State *L);
   template <typename T>
     extern std::string get_typename(lua_State *L);
+
+  /// get global table
+  /**
+   * @param L : lua interpreter
+   * @return global table object
+   */
   extern class object globals(lua_State *L);
   template <typename T>
     extern object lightuserdata(lua_State *L, T *p);
@@ -42,6 +51,12 @@ namespace luaport
   template <typename T>
     extern T object_cast(const object &obj);
   extern int type(const class object &obj);
+
+  /// get registry table
+  /**
+   * @param L : lua interpreter
+   * @return registry table object
+   */
   extern class object registry(lua_State *L);
 
   #define function(func) get_functype(func).get_lfunc<func>()
@@ -60,7 +75,11 @@ namespace luaport
     class weak_ref;
 
 
-  // class definitions
+
+  // ---------------------------------------------------------
+  // library class definitions
+  // ---------------------------------------------------------
+
 
   /// luaport exception class
   /**
@@ -114,23 +133,27 @@ namespace luaport
   };
 
 
+  /// Lua table iterator
+  /**
+   * traverses all the elements of the table, and retrieves values
+   */
   class iterator
   {
     public:
+
+      /// Constructor (from object)
+      /**
+       * @param table : table object to traverse
+       */
       iterator(const class object &table);
 
-      iterator(const iterator &src)
-        : L(src.L)
-      {
-        assert(L != NULL);
 
-        lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_table);
-        ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_key);
-        ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_val);
-        ref_val = luaL_ref(L, LUA_REGISTRYINDEX);
-      }
+      /// Copy Constructor
+      /**
+       * @param src : copy source
+       */
+      iterator(const iterator &src);
+
 
       ~iterator()
       {
@@ -170,43 +193,38 @@ namespace luaport
 
       class proxy operator*() const;
 
+
+      /// get next key-value pair in table (++i)
+      /**
+       * @return this iterator itself (referene)
+       */
       iterator &operator++()
       {
-//printf("TOP: %d\n", lua_gettop(L));
-//printf("REF TBL: %d\n", ref_table);
         lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
-//printf("TBL: %s\n", luaL_tolstring(L, -1, NULL)); lua_pop(L, 1);
-//printf("REF PREV: %d\n", ref_key);
         lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
-//printf("PREV: %s\n", object(from_stack(L, -1)).tostring().c_str());
-//printf("TOP: %d\n", lua_gettop(L));
         int result = lua_next(L, -2);
-//printf("TOP: %d\n", lua_gettop(L));
-//printf("RESULT: %d\n", result);
         if (result == 0)
         {
           this->clear();
-          lua_pop(L, 1);
-//printf("TOP: %d\n", lua_gettop(L));
+          lua_pop(L, 1); // pop table
           return *this;
         }
-//printf("VAL0: %s\n", object(from_stack(L, -1)).c_str());
         ref_val = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("TOP: %d\n", lua_gettop(L));
-//printf("KEY0: %s\n", object(from_stack(L, -1)).c_str());
         ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF KEY0: %d\n", ref_key);
-//printf("TOP: %d\n", lua_gettop(L));
-        lua_pop(L, 1);
-//printf("TOP: %d\n", lua_gettop(L));
+        lua_pop(L, 1); // pop table
         return *this;
       }
+      /// get next key-value pair in table (i++)
+      /**
+       * @return iterator before the promotion
+       */
       iterator operator++(int)
       {
         iterator i = *this;
         ++(*this);
         return i;
       }
+
 
     private:
       lua_State *L;
@@ -243,18 +261,7 @@ namespace luaport
       /**
        * @param src : lua object to copy
        */
-      object(const object &src)
-        : L(src.L), ref(LUA_REFNIL)
-      {
-        if (! L)
-        {
-          // copying empty (nil) object
-          return;
-        }
-
-        lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref);
-        ref = luaL_ref(L, LUA_REGISTRYINDEX);
-      }
+      object(const object &src);
 
 
 //      // Move Constructor
@@ -265,14 +272,7 @@ namespace luaport
       /**
        * @param s : spcifies index on the lua stack
        */
-      object(const from_stack &s)
-        : L(s.L), ref(LUA_REFNIL)
-      {
-        assert(L != NULL);
-
-        lua_pushvalue(L, s.idx);
-        ref = luaL_ref(L, LUA_REGISTRYINDEX);
-      }
+      object(const from_stack &s);
 
 
       /// Constructor (from proxy)
@@ -337,13 +337,15 @@ namespace luaport
       object getmetatable() const
       {
         this->push();
+
+        // metatable not exists
         if (! lua_getmetatable(L, -1))
         {
-          lua_pop(L, 1);
+          lua_pop(L, 1); // pop ref
           return object();
         }
         object m = from_stack(L, -1);
-        lua_pop(L, 2);
+        lua_pop(L, 2); // pop metatable, ref
         return m;
       }
 
@@ -392,10 +394,12 @@ namespace luaport
 
       bool setmetatable(const object &t)
       {
+        assert(t.type() == LUA_TTABLE || t.type() == LUA_TNIL);
+
         this->push();
         t.push();
         lua_setmetatable(L, -2);
-        lua_pop(L, 1);
+        lua_pop(L, 1); // pop this
         return true;
       }
 
@@ -444,14 +448,22 @@ namespace luaport
       template <typename T>
         class proxy operator[](const T &key) const;
 
-      // lua function call
+
+      /// call referred lua object as a function
+      /**
+       * @param argN : N-th argument for function call
+       */
       object operator()();
+      /// @overload
       template <typename T1>
         object operator()(T1 arg1);
+      /// @overload
       template <typename T1, typename T2>
         object operator()(T1 arg1, T2 arg2);
+      /// @overload
       template <typename T1, typename T2, typename T3>
         object operator()(T1 arg1, T2 arg2, T3 arg3);
+
 
       operator bool() const
       {
@@ -510,46 +522,46 @@ namespace luaport
   };
 
 
+  /// Table access proxy class
+  /**
+   * represents pair binding of table and key
+   */
   class proxy
   {
-
     public:
 
-      // Ctor (proxy binding)
+      /// Constructor (object-key binding)
+      /**
+       * @param L : lua interpreter
+       * @param table: source table
+       * @param key : index key
+       */
       template <typename T>
-        proxy(lua_State *L, int ref_srctable, const T &key);
-
-//      proxy(lua_State *L, int ref_table, int ref_key)
-//        : L(L), ref_table(ref_table), ref_key(ref_key)
-//      {
-////printf("REGIST (PROXY TABLE): %d\n", ref_table);
-////printf("REGIST (PROXY KEY): %d\n", ref_key);
-//      }
+        proxy(lua_State *L, const object &table, const T &key);
 
 
-      // Ctor (copying)
-      proxy(const proxy &src)
-        : L(src.L)
-      {
-//printf("COPYING PROXY!\n");
-        lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_table);
-        ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (TABLE): %d\n", ref_table);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_key);
-        ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (KEY): %d\n", ref_key);
-      }
+      /// Constructor (binding by referers)
+      /**
+       * @param L : lua interpreter
+       * @param ref_srctable : register index of the source table
+       * @param ref_srckey : register index of the source key
+       */
+      proxy(lua_State *L, int ref_srctable, int ref_srckey);
+
+
+      /// Copy Constructor
+      /**
+       * @param src : copy source
+       */
+      proxy(const proxy &src);
 
 
       virtual ~proxy()
       {
-        if (L)
-        {
-//printf("UNREF (PROXY KEY): %d\n", ref_key);
-          luaL_unref(L, LUA_REGISTRYINDEX, ref_key);
-//printf("UNREF (PROXY TABLE): %d\n", ref_table);
-          luaL_unref(L, LUA_REGISTRYINDEX, ref_table);
-        }
+        assert(L != NULL);
+
+        luaL_unref(L, LUA_REGISTRYINDEX, ref_key);
+        luaL_unref(L, LUA_REGISTRYINDEX, ref_table);
       }
 
       bool is_valid() const
@@ -804,7 +816,11 @@ printf("COPYING FROM REFERENCE!\n");
 
     static int lua_class_get_member(lua_State *L);
     static int lua_class_set_member(lua_State *L);
-    inline static std::string lua_get_args_string(lua_State *L);
+
+    // get string representation of all stack elements from bottom to top
+    // results in "([...,] function, arg1, ..., argN)" for function call
+    static std::string lua_get_args_string(lua_State *L);
+    static int lua_copy_ref(lua_State *L, int ref);
 
     // push to the stack
     static void push(lua_State *L, const bool &value);
@@ -826,7 +842,8 @@ printf("COPYING FROM REFERENCE!\n");
 
 
   // ---------------------------------------------------------
-  // detail class defintion
+  // detail class definition
+  // ---------------------------------------------------------
 
   namespace detail
   {
@@ -910,7 +927,8 @@ printf("COPYING FROM REFERENCE!\n");
 
 
 // ------------------------------------------------------
-// inner function implementation
+// inner (static) function implementation
+// ------------------------------------------------------
 namespace luaport
 {
   namespace detail
@@ -1007,6 +1025,13 @@ namespace luaport
       }
       args += ")";
       return args;
+    }
+
+
+    inline static int lua_copy_ref(lua_State *L, int ref)
+    {
+      lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+      return luaL_ref(L, LUA_REGISTRYINDEX);
     }
 
 
@@ -1238,6 +1263,7 @@ namespace luaport
 
 // -----------------------------------------------------
 // inner class implementation
+// -----------------------------------------------------
 
 namespace luaport
 {
@@ -2275,13 +2301,12 @@ namespace luaport
 
 } // namespace luaport
 
-// function implementation
+// -----------------------------------------------------
+// library function implementation
+// -----------------------------------------------------
 namespace luaport
 {
   using namespace detail;
-
-  // ------------------------------------------------------
-  // function implementation
 
   template <typename T>
     inline std::string get_typename(lua_State *L)
@@ -2454,11 +2479,14 @@ printf("D RETURN\n");
 
 
 // ----------------------------------------------------------------
-// class implementation
+// library class implementation
+// ----------------------------------------------------------------
 
 // iterator class implementation
 namespace luaport
 {
+
+  // Ctor (from object)
   inline iterator::iterator(const object &table)
     : ref_table(LUA_REFNIL), ref_key(LUA_REFNIL), ref_val(LUA_REFNIL)
   {
@@ -2466,22 +2494,30 @@ namespace luaport
     if (! L) { throw luaport::exception("given invalid interpreter"); }
     table.push();
     ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF TBL: %d\n", ref_table);
     table.push();
-//printf("TBL: %s\n", luaL_tolstring(L, -1, NULL)); lua_pop(L, 1);
-//printf("REF PREV: %d\n", ref_key);
     lua_pushnil(L);
     int result = lua_next(L, -2);
-//printf("RESULT: %d\n", result);
     if (result == 0)
     {
       clear();
-      lua_pop(L, 1);
+      lua_pop(L, 1); // pop table
       return;
     }
     ref_val = luaL_ref(L, LUA_REGISTRYINDEX);
     ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
-    lua_pop(L, 1);
+    lua_pop(L, 1); // pop table
+  }
+
+
+  // Ctor (copying)
+  inline iterator::iterator(const iterator &src)
+    : L(src.L)
+  {
+    assert(L != NULL);
+
+    ref_table = lua_copy_ref(L, src.ref_table);
+    ref_key   = lua_copy_ref(L, src.ref_key);
+    ref_val   = lua_copy_ref(L, src.ref_val);
   }
 
 
@@ -2489,7 +2525,7 @@ namespace luaport
   {
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
     object key(from_stack(L, -1));
-    lua_pop(L, 1);
+    lua_pop(L, 1); // pop key
     return key;
   }
 
@@ -2498,20 +2534,14 @@ namespace luaport
   {
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref_val);
     object val(from_stack(L, -1));
-    lua_pop(L, 1);
+    lua_pop(L, 1); // pop val
     return val;
   }
 
 
   inline proxy iterator::operator*() const
   {
-//    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
-//    int t = luaL_ref(L, LUA_REGISTRYINDEX);
-//    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
-//    int k = luaL_ref(L, LUA_REGISTRYINDEX);
-//    return proxy(L, t, k);
-
-    return proxy(L, ref_table, key());
+    return proxy(L, ref_table, ref_key);
   }
 
 }
@@ -2520,14 +2550,39 @@ namespace luaport
 namespace luaport
 {
 
+  // Ctor (copying)
+  inline object::object(const object &src)
+    : L(src.L), ref(LUA_REFNIL)
+  {
+    if (! L)
+    {
+      // copying empty (nil) object
+      return;
+    }
+
+    ref = lua_copy_ref(L, src.ref);
+  }
+
+
+  // Ctor (from stack)
+  inline object::object(const from_stack &s)
+    : L(s.L), ref(LUA_REFNIL)
+  {
+    assert(L != NULL);
+
+    lua_pushvalue(L, s.idx);
+    ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+
+
+  // Ctor (from proxy)
   inline object::object(const proxy &p)
     : L(p.L), ref(LUA_REFNIL)
   {
-//printf("FROM PROXY!\n");
-    if (! L) { throw luaport::exception("given invalid interpreter"); }
+    assert(L != NULL);
     if (p.ref_table == LUA_REFNIL)
     {
-      throw luaport::exception("attempt to index a nil value");
+      throw luaport::exception("error on object::object - attempt to index a nil value");
     }
     lua_rawgeti(L, LUA_REGISTRYINDEX, p.ref_table);
     lua_rawgeti(L, LUA_REGISTRYINDEX, p.ref_key);
@@ -2617,6 +2672,7 @@ printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
   }
 
 
+  // table preparation
   template <typename T>
     inline object object::table(const T &key, bool force)
   {
@@ -2634,7 +2690,7 @@ printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
       std::string tname = this->tostring();
       std::string kname = object(L, key).tostring();
       std::string msg =
-        "error on object::table method : \"" + tname + "\"" +
+        "error on object::table method - \"" + tname + "\"" +
         " already has non-table member with key \"" + kname + "\"";
       throw exception(msg);
     }
@@ -2647,13 +2703,7 @@ printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
   template <typename T>
     inline proxy object::operator[](const T &key) const
   {
-//    this->push();
-//    int ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
-//    luaport::push(L, key);
-//    int ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
-//    return proxy(L, ref_table, ref_key);
-
-    return proxy(L, ref, key);
+    return proxy(L, *this, key);
   }
 
 
@@ -2706,17 +2756,42 @@ printf("%s?\n", (const char *)registry(L)["luaport"]["class_to_name"][c].obj());
 namespace luaport
 {
 
-  // Ctor (proxy binding)
+  // Ctor (object-key binding)
   template <typename T>
-    inline proxy::proxy(lua_State *L, int ref_srctable, const T &key)
+    inline proxy::proxy(lua_State *L, const object &table, const T &key)
     : L(L)
   {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_srctable);
+    assert(L != NULL);
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, table.ref);
     ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (TABLE): %d\n", ref_table);
     luaport::push(L, key);
     ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (KEY): %d\n", ref_key);
+  }
+
+
+  // Ctor (binding by refereres)
+  inline proxy::proxy(lua_State *L, int ref_srctable, int ref_srckey)
+    : L(L)
+  {
+    assert(L != NULL);
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_srctable);
+    ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref_srckey);
+    ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+
+  // Ctor (copying)
+  inline proxy::proxy(const proxy &src)
+    : L(src.L)
+  {
+    assert(L != NULL);
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_table);
+    ref_table = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, src.ref_key);
+    ref_key = luaL_ref(L, LUA_REGISTRYINDEX);
   }
 
 
@@ -2724,39 +2799,19 @@ namespace luaport
   template <typename T>
     inline void proxy::operator=(const T &val)
   {
-//    if (ref_table == LUA_REFNIL)
-//    {
-//      luaL_error(L, "attempt to index a nil value");
-//      return;
-//    }
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
     luaport::push(L, val);
     lua_settable(L, -3);
-    lua_pop(L, 1);
+    lua_pop(L, 1); // pop table
   }
+
 
   // more index access
   template <typename T>
     inline proxy proxy::operator[](const T &key) const
   {
-//        if (ref_table == LUA_REFNIL)
-//        {
-//          luaL_error(L, "attempt to index a nil value");
-//        }
-//      lua_rawgeti(L, LUA_REGISTRYINDEX, ref_table);
-//      lua_rawgeti(L, LUA_REGISTRYINDEX, ref_key);
-//      lua_gettable(L, -2);
-//    int newtable = luaL_ref(L, LUA_REGISTRYINDEX);
-//printf("REF (TABLE): %d\n", newtable);
-//    lua_pop(L, 1);
-//    luaport::push(L, key);
-//    int newkey = luaL_ref(L, LUA_REGISTRYINDEX);
-////printf("REF (KEY): %d\n", newkey);
-//     return proxy(L, newtable, newkey);
-
-    object t(*this);
-    return proxy(L, t.ref, key);
+    return proxy(L, object(*this), key);
   }
 
 }
